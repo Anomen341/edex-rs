@@ -74,9 +74,6 @@ impl PanelId {
         match self {
             Self::Files => "CURRENT DIRECTORY OF ACTIVE TERMINAL",
             Self::Keyboard => "LIVE KEY HIGHLIGHT",
-            Self::Network => "STATE / INTERFACE / IPV4 / EXTERNAL IP / LATENCY",
-            Self::Globe => "DOTTED GLOBE + CONNECTION POINTS",
-            Self::Traffic => "UP/DOWN GRAPH + TOTALS",
             _ => "",
         }
     }
@@ -134,9 +131,9 @@ pub fn compute(window: Rect, fonts: &FontSizes) -> Layout {
     stack(
         right_body,
         &[
-            Slot { id: PanelId::Network, min: panel_top + body_row * 2.0, weight: 0.6 },
-            Slot { id: PanelId::Globe, min: panel_top + body_row * 5.0, weight: 3.0 },
-            Slot { id: PanelId::Traffic, min: panel_top + body_row * 4.0, weight: 2.0 },
+            Slot { id: PanelId::Network, min: panel_top + caption_row * 2.0 + body_row, weight: 0.0 },
+            Slot { id: PanelId::Globe, min: panel_top + caption_row + body_row * 4.0, weight: 3.0 },
+            Slot { id: PanelId::Traffic, min: panel_top + caption_row + body_row * 3.0, weight: 2.0 },
         ],
         &mut panels,
     );

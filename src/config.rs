@@ -22,6 +22,10 @@ pub struct Config {
     pub shell: Option<Vec<String>>,
     /// Lines of history kept per tab.
     pub scrollback: usize,
+    /// `host:port` that latency is measured against, by TCP connect.
+    pub latency_host: String,
+    /// A plain HTTP address that replies with your IP. Empty turns it off.
+    pub external_ip_url: String,
     /// Show the clock as 12-hour with AM or PM instead of 24-hour.
     pub twelve_hour_clock: bool,
 }
@@ -37,6 +41,8 @@ impl Default for Config {
             },
             shell: None,
             scrollback: 10_000,
+            latency_host: "1.1.1.1:443".to_owned(),
+            external_ip_url: "http://api.ipify.org/".to_owned(),
             twelve_hour_clock: false,
         }
     }

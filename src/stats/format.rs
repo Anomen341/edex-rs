@@ -50,6 +50,28 @@ pub fn gib_pair(used: u64, total: u64) -> String {
     format!("{:.1}/{:.1} GiB", used as f64 / GIB, total as f64 / GIB)
 }
 
+/// A rate in megabytes a second, such as `1.25`.
+pub fn mb_rate(bytes_per_second: Option<f32>) -> String {
+    bytes_per_second.map_or_else(|| NOT_AVAILABLE.to_owned(), |rate| format!("{:.2}", rate / 1_000_000.0))
+}
+
+/// A byte count in the largest fitting unit, such as `3.2 GB`.
+pub fn bytes(value: Option<u64>) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let Some(value) = value else { return NOT_AVAILABLE.to_owned() };
+    let mut amount = value as f64;
+    let mut unit = 0;
+    while amount >= 1000.0 && unit + 1 < UNITS.len() {
+        amount /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value} B")
+    } else {
+        format!("{amount:.1} {}", UNITS[unit])
+    }
+}
+
 pub fn count(value: Option<usize>) -> String {
     value.map_or_else(|| NOT_AVAILABLE.to_owned(), |v| v.to_string())
 }
@@ -104,6 +126,18 @@ mod tests {
         assert_eq!(ghz(Some(2849)), "2.8G");
         assert_eq!(memory_use(1 << 30, 4 << 30), "USING 1.0 OUT OF 4.0 GiB");
         assert_eq!(gib_pair(2 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024), "2.0/4.0 GiB");
+    }
+
+    #[test]
+    fn traffic_figures_read_cleanly() {
+        assert_eq!(mb_rate(None), "N/A");
+        assert_eq!(mb_rate(Some(1_250_000.0)), "1.25");
+        assert_eq!(bytes(None), "N/A");
+        assert_eq!(bytes(Some(0)), "0 B");
+        assert_eq!(bytes(Some(999)), "999 B");
+        assert_eq!(bytes(Some(1_500)), "1.5 KB");
+        assert_eq!(bytes(Some(3_200_000_000)), "3.2 GB");
+        assert_eq!(bytes(Some(u64::MAX)), "18446744.1 TB");
     }
 
     #[test]

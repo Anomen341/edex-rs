@@ -3,6 +3,7 @@
 
 pub mod layout;
 pub mod monitor;
+pub mod network;
 pub mod panel;
 pub mod terminal;
 
@@ -17,7 +18,7 @@ pub fn draw_panels(painter: &Painter, layout: &Layout, style: &Style<'_>) {
     panel::column_header(painter, layout.left_header, Column::Left, style);
     panel::column_header(painter, layout.right_header, Column::Right, style);
     for (id, rect) in &layout.panels {
-        if matches!(id, PanelId::Files | PanelId::Keyboard | PanelId::Network | PanelId::Globe | PanelId::Traffic) {
+        if matches!(id, PanelId::Files | PanelId::Keyboard) {
             panel::placeholder(painter, *id, *rect, style);
         }
     }

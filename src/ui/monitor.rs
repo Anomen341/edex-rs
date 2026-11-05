@@ -1,7 +1,7 @@
 //! The live left column. Each panel draws from the latest snapshot and falls
 //! back to N/A for anything missing, at any panel size.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 use egui::{pos2, vec2, Align2, FontId, Painter, Rect, Shape, Stroke};
@@ -25,7 +25,7 @@ pub fn draw(
     animate: bool,
     style: &Style<'_>,
 ) {
-    let scroll = if animate { scroll_progress(snapshot.sampled_at, Instant::now()) } else { 1.0 };
+    let scroll = if animate { scroll_progress(snapshot.sampled_at, Instant::now(), CPU_INTERVAL) } else { 1.0 };
     for (id, rect) in &layout.panels {
         match id {
             PanelId::Clock => {
@@ -43,9 +43,9 @@ pub fn draw(
 }
 
 /// How far through the gap to the next sample we are, from 0 to 1.
-fn scroll_progress(sampled_at: Option<Instant>, now: Instant) -> f32 {
+pub fn scroll_progress(sampled_at: Option<Instant>, now: Instant, interval: Duration) -> f32 {
     sampled_at.map_or(1.0, |at| {
-        (now.saturating_duration_since(at).as_secs_f32() / CPU_INTERVAL.as_secs_f32()).clamp(0.0, 1.0)
+        (now.saturating_duration_since(at).as_secs_f32() / interval.as_secs_f32()).clamp(0.0, 1.0)
     })
 }
 
@@ -64,7 +64,7 @@ fn chars_in(width: f32, size: f32) -> usize {
 
 /// A row of label-over-value cells. Columns take the width their text needs,
 /// and all values share one size, shrunk only if the row would not fit.
-fn cells(painter: &Painter, area: Rect, items: &[(&str, String)], style: &Style<'_>) {
+pub fn cells(painter: &Painter, area: Rect, items: &[(&str, String)], style: &Style<'_>) {
     const GAP_CHARS: f32 = 1.5;
     let theme = style.theme;
     let caption = style.caption();
@@ -215,15 +215,15 @@ fn core_graph(painter: &Painter, group: Rect, cores: &[Vec<f32>], first_core: us
     clip.hline(area.x_range(), area.center().y, Stroke::new(1.0, theme.grid));
     let core_stroke = Stroke::new(1.0, theme.muted);
     for core in cores {
-        clip.add(Shape::line(graph_points(area, core, scroll), core_stroke));
+        clip.add(Shape::line(graph_points(area, core, scroll, HISTORY), core_stroke));
     }
-    clip.add(Shape::line(graph_points(area, &mean, scroll), Stroke::new(1.6, theme.foreground)));
+    clip.add(Shape::line(graph_points(area, &mean, scroll, HISTORY), Stroke::new(1.6, theme.foreground)));
 }
 
 /// Newest sample at the right, sliding in as `scroll` goes from 0 to 1 so the
 /// line moves continuously between samples. The caller clips the overhang.
-fn graph_points(area: Rect, values: &[f32], scroll: f32) -> Vec<egui::Pos2> {
-    let step = area.width() / (HISTORY - 1) as f32;
+pub fn graph_points(area: Rect, values: &[f32], scroll: f32, history: usize) -> Vec<egui::Pos2> {
+    let step = area.width() / (history - 1) as f32;
     let count = values.len();
     let right = area.max.x + (1.0 - scroll) * step;
     values
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn graph_points_stay_inside_their_area() {
         let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 50.0));
-        let points = graph_points(area, &[-5.0, 0.0, 50.0, 100.0, 500.0], 1.0);
+        let points = graph_points(area, &[-5.0, 0.0, 50.0, 100.0, 500.0], 1.0, HISTORY);
         assert!(points.iter().all(|p| area.expand(0.01).contains(*p)));
         assert_eq!(points.last().unwrap().x, area.max.x);
         assert_eq!(points[1].y, area.max.y);
@@ -505,8 +505,8 @@ mod tests {
     #[test]
     fn the_graph_slides_a_full_step_between_samples() {
         let area = Rect::from_min_size(pos2(0.0, 0.0), vec2((HISTORY - 1) as f32, 50.0));
-        let start = graph_points(area, &[10.0, 20.0], 0.0);
-        let end = graph_points(area, &[10.0, 20.0], 1.0);
+        let start = graph_points(area, &[10.0, 20.0], 0.0, HISTORY);
+        let end = graph_points(area, &[10.0, 20.0], 1.0, HISTORY);
         assert_eq!(start[1].x - end[1].x, 1.0);
         assert_eq!(end[1].x, area.max.x);
     }
@@ -514,10 +514,10 @@ mod tests {
     #[test]
     fn scroll_progress_runs_from_zero_to_one_and_stops() {
         let start = Instant::now();
-        assert_eq!(scroll_progress(Some(start), start), 0.0);
-        assert!((scroll_progress(Some(start), start + CPU_INTERVAL / 2) - 0.5).abs() < 0.01);
-        assert_eq!(scroll_progress(Some(start), start + CPU_INTERVAL * 3), 1.0);
-        assert_eq!(scroll_progress(None, start), 1.0);
+        assert_eq!(scroll_progress(Some(start), start, CPU_INTERVAL), 0.0);
+        assert!((scroll_progress(Some(start), start + CPU_INTERVAL / 2, CPU_INTERVAL) - 0.5).abs() < 0.01);
+        assert_eq!(scroll_progress(Some(start), start + CPU_INTERVAL * 3, CPU_INTERVAL), 1.0);
+        assert_eq!(scroll_progress(None, start, CPU_INTERVAL), 1.0);
     }
 
     #[test]

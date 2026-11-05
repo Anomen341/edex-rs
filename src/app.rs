@@ -9,12 +9,13 @@ use eframe::glow::HasContext;
 use egui::{FontData, FontDefinitions, FontFamily};
 
 use crate::config::Config;
+use crate::net::{self, NetSnapshot};
 use crate::stats::{self, Snapshot};
 use crate::term::tabs::Tabs;
 use crate::theme::Theme;
 use crate::ui::panel::{Style, DISPLAY_FONT};
 use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
-use crate::ui::{self, layout, monitor};
+use crate::ui::{self, layout, monitor, network};
 
 /// Smooth graphs redraw about 30 times a second. That is nothing on a GPU, but
 /// heavy on a software renderer, so they are off there. Frame cost is also
@@ -33,6 +34,8 @@ pub struct EdexApp {
     terminal: TerminalView,
     stats: Receiver<Snapshot>,
     snapshot: Snapshot,
+    net: Receiver<NetSnapshot>,
+    net_snapshot: NetSnapshot,
     software_renderer: bool,
     /// Recent CPU seconds per frame, smoothed.
     frame_cost: f32,
@@ -49,7 +52,20 @@ impl EdexApp {
         let tabs = Tabs::new(&config, &theme.terminal, &cc.egui_ctx);
         let terminal = TerminalView::new(config.fonts.terminal);
         let software_renderer = uses_software_renderer(cc);
-        Self { config, theme, tabs, terminal, stats: stats::spawn(), snapshot: Snapshot::default(), software_renderer, frame_cost: 0.0, animate: !software_renderer }
+        let net = net::spawn(&config);
+        Self {
+            config,
+            theme,
+            tabs,
+            terminal,
+            stats: stats::spawn(),
+            snapshot: Snapshot::default(),
+            net,
+            net_snapshot: NetSnapshot::default(),
+            software_renderer,
+            frame_cost: 0.0,
+            animate: !software_renderer,
+        }
     }
 
     /// Update the smoothed frame cost and decide whether to animate.
@@ -58,26 +74,16 @@ impl EdexApp {
         self.animate = !self.software_renderer && next_animate(self.animate, self.frame_cost);
     }
 
-    /// Take the newest snapshot without waiting. If the stats thread has gone,
-    /// stale numbers would mislead, so the panels fall back to N/A.
-    fn receive_stats(&mut self) {
-        loop {
-            match self.stats.try_recv() {
-                Ok(snapshot) => self.snapshot = snapshot,
-                Err(TryRecvError::Empty) => return,
-                Err(TryRecvError::Disconnected) => {
-                    self.snapshot = Snapshot::default();
-                    return;
-                }
-            }
-        }
+    fn receive_data(&mut self) {
+        receive_latest(&self.stats, &mut self.snapshot);
+        receive_latest(&self.net, &mut self.net_snapshot);
     }
 }
 
 impl eframe::App for EdexApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.receive_stats();
+        self.receive_data();
         let now = Local::now();
         if let Some(cost) = frame.info().cpu_usage {
             self.track_frame_cost(cost);
@@ -95,11 +101,28 @@ impl eframe::App for EdexApp {
         let style = Style { theme: &self.theme, fonts: &self.config.fonts };
         ui::draw_panels(painter, &layout, &style);
         monitor::draw(painter, &layout, &self.snapshot, now, self.config.twelve_hour_clock, self.animate, &style);
+        let time = ctx.input(|i| i.time);
+        network::draw(painter, &layout, &self.net_snapshot, time, self.animate, &style);
         self.terminal.show(&ctx, painter, &layout, &mut self.tabs, &style);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.theme.background.to_normalized_gamma_f32()
+    }
+}
+
+/// Take the newest value without waiting. If its thread has gone, stale numbers
+/// would mislead, so the panels fall back to their empty state.
+fn receive_latest<T: Default>(receiver: &Receiver<T>, latest: &mut T) {
+    loop {
+        match receiver.try_recv() {
+            Ok(value) => *latest = value,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                *latest = T::default();
+                return;
+            }
+        }
     }
 }
 
