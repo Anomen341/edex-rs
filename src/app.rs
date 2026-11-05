@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::stats::{self, Snapshot};
 use crate::term::tabs::Tabs;
 use crate::theme::Theme;
-use crate::ui::panel::Style;
+use crate::ui::panel::{Style, DISPLAY_FONT};
 use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
 use crate::ui::{self, layout, monitor};
 
@@ -68,7 +68,7 @@ impl eframe::App for EdexApp {
         let layout = layout::compute(window, &self.config.fonts);
         let style = Style { theme: &self.theme, fonts: &self.config.fonts };
         ui::draw_panels(painter, &layout, &style);
-        monitor::draw(painter, &layout, &self.snapshot, now, &style);
+        monitor::draw(painter, &layout, &self.snapshot, now, self.config.twelve_hour_clock, &style);
         self.terminal.show(&ctx, painter, &layout, &mut self.tabs, &style);
     }
 
@@ -89,12 +89,13 @@ fn install_fonts(ctx: &egui::Context) {
     add(&mut fonts, BOLD, include_bytes!("../assets/fonts/JetBrainsMonoNL-Bold.ttf"));
     add(&mut fonts, ITALIC, include_bytes!("../assets/fonts/JetBrainsMonoNL-Italic.ttf"));
     add(&mut fonts, BOLD_ITALIC, include_bytes!("../assets/fonts/JetBrainsMonoNL-BoldItalic.ttf"));
+    add(&mut fonts, DISPLAY_FONT, include_bytes!("../assets/fonts/ShareTech-Regular.ttf"));
 
     let fallbacks = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     for family in [FontFamily::Monospace, FontFamily::Proportional] {
         fonts.families.entry(family).or_default().insert(0, REGULAR.to_owned());
     }
-    for name in [BOLD, ITALIC, BOLD_ITALIC] {
+    for name in [BOLD, ITALIC, BOLD_ITALIC, DISPLAY_FONT] {
         let mut list = vec![name.to_owned()];
         list.extend(fallbacks.iter().cloned());
         fonts.families.insert(FontFamily::Name(name.into()), list);

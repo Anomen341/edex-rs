@@ -22,6 +22,8 @@ pub struct Config {
     pub shell: Option<Vec<String>>,
     /// Lines of history kept per tab.
     pub scrollback: usize,
+    /// Show the clock as 12-hour with AM or PM instead of 24-hour.
+    pub twelve_hour_clock: bool,
 }
 
 impl Default for Config {
@@ -35,6 +37,7 @@ impl Default for Config {
             },
             shell: None,
             scrollback: 10_000,
+            twelve_hour_clock: false,
         }
     }
 }

@@ -2,7 +2,7 @@
 //! back to N/A for anything missing, at any panel size.
 
 use chrono::{DateTime, Local};
-use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Rect, Shape, Stroke};
+use egui::{pos2, vec2, Align2, FontId, Painter, Rect, Shape, Stroke};
 
 use super::layout::{Layout, PanelId};
 use super::panel::{self, Style};
@@ -11,15 +11,23 @@ use crate::stats::{CpuStats, MemoryStats, ProcessRow, Snapshot, HISTORY};
 
 /// Monospace advance as a share of the font size.
 const CHAR_WIDTH: f32 = 0.6;
-const DOT_PITCH: f32 = 7.0;
-const DOT_RADIUS: f32 = 2.0;
-/// Hide the CPU model line below this panel height, so the graphs keep room.
-const CPU_MODEL_MIN_HEIGHT: f32 = 170.0;
+const DOT_PITCH: f32 = 6.0;
+const DOT_RADIUS: f32 = 1.5;
 
-pub fn draw(painter: &Painter, layout: &Layout, snapshot: &Snapshot, now: DateTime<Local>, style: &Style<'_>) {
+pub fn draw(
+    painter: &Painter,
+    layout: &Layout,
+    snapshot: &Snapshot,
+    now: DateTime<Local>,
+    twelve_hour: bool,
+    style: &Style<'_>,
+) {
     for (id, rect) in &layout.panels {
         match id {
-            PanelId::Clock => panel::clock(painter, *rect, &now.format("%H:%M:%S").to_string(), style),
+            PanelId::Clock => {
+                let (time, suffix) = clock_text(now, twelve_hour);
+                panel::clock(painter, *rect, &time, suffix.as_deref(), style);
+            }
             PanelId::System => system(painter, *rect, snapshot, now, style),
             PanelId::Hardware => hardware(painter, *rect, snapshot, style),
             PanelId::Cpu => cpu(painter, *rect, &snapshot.cpu, style),
@@ -27,6 +35,14 @@ pub fn draw(painter: &Painter, layout: &Layout, snapshot: &Snapshot, now: DateTi
             PanelId::Processes => processes(painter, *rect, &snapshot.processes, style),
             _ => {}
         }
+    }
+}
+
+fn clock_text(now: DateTime<Local>, twelve_hour: bool) -> (String, Option<String>) {
+    if twelve_hour {
+        (now.format("%I:%M:%S").to_string(), Some(now.format("%p").to_string()))
+    } else {
+        (now.format("%H:%M:%S").to_string(), None)
     }
 }
 
@@ -40,9 +56,10 @@ fn chars_in(width: f32, size: f32) -> usize {
 fn cells(painter: &Painter, area: Rect, items: &[(&str, String)], style: &Style<'_>) {
     const GAP_CHARS: f32 = 1.5;
     let theme = style.theme;
-    let label_size = style.fonts.label * 0.87;
+    let caption = style.caption();
+    let label_size = caption.size;
     let widest = |item: &(&str, String)| {
-        let label = item.0.chars().count() as f32 * label_size / style.fonts.body;
+        let label = item.0.chars().count() as f32 * label_size * 0.86 / style.fonts.body;
         (item.1.chars().count() as f32).max(label)
     };
     let needed: f32 = items.iter().map(widest).sum();
@@ -54,7 +71,7 @@ fn cells(painter: &Painter, area: Rect, items: &[(&str, String)], style: &Style<
     let gap = GAP_CHARS * size * CHAR_WIDTH + spare / (items.len() as f32 - 1.0).max(1.0);
     let mut x = area.min.x;
     for item in items {
-        painter.text(pos2(x, area.min.y), Align2::LEFT_TOP, item.0, FontId::monospace(label_size), theme.muted);
+        painter.text(pos2(x, area.min.y), Align2::LEFT_TOP, item.0, caption.clone(), theme.muted);
         let at = pos2(x, area.min.y + label_size * 1.25);
         painter.text(at, Align2::LEFT_TOP, &item.1, FontId::monospace(size), theme.foreground);
         x += widest(item) * size * CHAR_WIDTH + gap;
@@ -62,61 +79,61 @@ fn cells(painter: &Painter, area: Rect, items: &[(&str, String)], style: &Style<
 }
 
 fn system(painter: &Painter, rect: Rect, snapshot: &Snapshot, now: DateTime<Local>, style: &Style<'_>) {
-    let (inner, content) = panel::titled(painter, rect, PanelId::System.title(), None, style);
-    let date = now.format("%b %d").to_string().to_uppercase();
+    let (inner, content) = panel::ruled(painter, rect, style);
+    let year = now.format("%Y").to_string();
+    let date = now.format("%b %-d").to_string().to_uppercase();
+    let os = if cfg!(windows) { "win" } else { std::env::consts::OS };
     cells(
         &inner,
         content,
         &[
-            ("DATE", date),
+            (&year, date),
             ("UPTIME", format::uptime(snapshot.uptime_seconds)),
-            ("OS", std::env::consts::OS.to_uppercase()),
+            ("TYPE", os.to_owned()),
             ("POWER", format::power(snapshot.power)),
         ],
         style,
     );
 }
 
+/// Three columns, with long names cut to fit their column.
 fn hardware(painter: &Painter, rect: Rect, snapshot: &Snapshot, style: &Style<'_>) {
-    let (inner, content) = panel::titled(painter, rect, PanelId::Hardware.title(), None, style);
+    let (inner, content) = panel::ruled(painter, rect, style);
     let hardware = &snapshot.hardware;
-    let rows = [
-        ("MAKER", &hardware.manufacturer),
-        ("MODEL", &hardware.model),
-        ("CHASSIS", &hardware.chassis),
+    let columns = [
+        ("MANUFACTURER", &hardware.manufacturer, 0.0),
+        ("MODEL", &hardware.model, 0.44),
+        ("CHASSIS", &hardware.chassis, 0.72),
     ];
+    let caption = style.caption();
     let size = style.fonts.label;
-    let step = content.height() / rows.len() as f32;
-    let key_width = 8.0 * size * CHAR_WIDTH;
-    let value_chars = chars_in(content.width() - key_width, size);
-    for (i, (key, value)) in rows.iter().enumerate() {
-        let y = content.min.y + i as f32 * step;
-        let font = FontId::monospace(size);
-        inner.text(pos2(content.min.x, y), Align2::LEFT_TOP, *key, font.clone(), style.theme.muted);
-        let text = format::truncate(format::text(value.as_deref()), value_chars);
-        inner.text(pos2(content.min.x + key_width, y), Align2::LEFT_TOP, text, font, style.theme.foreground);
+    let gap_after = |i: usize| columns.get(i + 1).map_or(1.0, |c| c.2) - columns[i].2;
+    for (i, (label, value, start)) in columns.iter().enumerate() {
+        let x = content.min.x + content.width() * start;
+        inner.text(pos2(x, content.min.y), Align2::LEFT_TOP, *label, caption.clone(), style.theme.muted);
+        let width = content.width() * gap_after(i) - 6.0;
+        let text = format::truncate(format::text(value.as_deref()), chars_in(width, size));
+        let at = pos2(x, content.min.y + caption.size * 1.25);
+        inner.text(at, Align2::LEFT_TOP, text, FontId::monospace(size), style.theme.foreground);
     }
 }
 
 fn cpu(painter: &Painter, rect: Rect, cpu: &CpuStats, style: &Style<'_>) {
-    let average = format!("AVG {}", format::percent(cpu.average));
-    let (inner, mut content) = panel::titled(painter, rect, PanelId::Cpu.title(), Some(&average), style);
+    let chars = chars_in(rect.width() * 0.62, style.caption().size * 0.86);
+    let model = format::truncate(format::text(cpu.model.as_deref()), chars);
+    let (inner, content) = panel::titled(painter, rect, PanelId::Cpu.title(), Some(&model), style);
 
-    let small = style.fonts.label * 0.87;
-    if rect.height() >= CPU_MODEL_MIN_HEIGHT {
-        let text = format::truncate(format::text(cpu.model.as_deref()), chars_in(content.width(), small));
-        inner.text(content.min, Align2::LEFT_TOP, text, FontId::monospace(small), style.theme.muted);
-        content.min.y += small * 1.4;
-    }
-
-    let footer_height = small * 1.25 + style.fonts.body * 1.3;
+    let footer_height = style.caption().size * 1.25 + style.fonts.body * 1.3;
     let footer = Rect::from_min_max(pos2(content.min.x, content.max.y - footer_height), content.max);
+    let cores = (!cpu.history.is_empty()).then_some(cpu.history.len());
     cells(
         &inner,
         footer,
         &[
+            ("CORES", format::count(cores)),
+            ("SPD", format::ghz(cpu.frequency_mhz)),
+            ("MAX", format::ghz(cpu.max_frequency_mhz)),
             ("TEMP", format::temperature(cpu.temperature)),
-            ("GHZ", format::frequency(cpu.frequency_mhz, cpu.max_frequency_mhz)),
             ("TASKS", format::count(cpu.tasks)),
         ],
         style,
@@ -128,13 +145,30 @@ fn cpu(painter: &Painter, rect: Rect, cpu: &CpuStats, style: &Style<'_>) {
         no_data(&inner, graphs, style);
         return;
     }
-    let gap = 5.0;
-    let height = (graphs.height() - gap * (groups.len() - 1) as f32) / groups.len() as f32;
-    for (i, group) in groups.iter().enumerate() {
-        let top = graphs.min.y + i as f32 * (height + gap);
-        let area = Rect::from_min_size(pos2(graphs.min.x, top), vec2(graphs.width(), height));
+    for (area, group) in graph_areas(graphs, groups.len()).into_iter().zip(&groups) {
         core_graph(&inner, area, &cpu.history[group.clone()], group.start + 1, style);
     }
+}
+
+/// Stack the groups, or put them side by side when a short panel would leave
+/// too little height for a label and a graph.
+fn graph_areas(area: Rect, count: usize) -> Vec<Rect> {
+    const GAP: f32 = 6.0;
+    const MIN_STACKED_HEIGHT: f32 = 30.0;
+    let gaps = GAP * (count.saturating_sub(1)) as f32;
+    let stacked = (area.height() - gaps) / count.max(1) as f32;
+    (0..count)
+        .map(|i| {
+            if stacked >= MIN_STACKED_HEIGHT {
+                let top = area.min.y + i as f32 * (stacked + GAP);
+                Rect::from_min_size(pos2(area.min.x, top), vec2(area.width(), stacked))
+            } else {
+                let width = (area.width() - gaps) / count as f32;
+                let left = area.min.x + i as f32 * (width + GAP);
+                Rect::from_min_size(pos2(left, area.min.y), vec2(width, area.height()))
+            }
+        })
+        .collect()
 }
 
 /// Split the cores into at most two halves, as the graphs show them.
@@ -149,25 +183,30 @@ fn core_groups(cores: usize) -> Vec<std::ops::Range<usize>> {
     }
 }
 
-/// Faint lines for each core, one bright line for the group's mean, on a fixed
-/// 0-100 scale so two graphs can be compared at a glance.
-fn core_graph(painter: &Painter, area: Rect, cores: &[Vec<f32>], first_core: usize, style: &Style<'_>) {
+/// Names and mean at the left; faint lines for each core and one bright line
+/// for the group's mean at the right. The fixed 0-100 scale keeps groups
+/// comparable at a glance.
+fn core_graph(painter: &Painter, group: Rect, cores: &[Vec<f32>], first_core: usize, style: &Style<'_>) {
+    const LABEL_WIDTH: f32 = 66.0;
     let theme = style.theme;
-    let clip = painter.with_clip_rect(area);
-    clip.rect_stroke(area, 0.0, Stroke::new(1.0, theme.line), egui::StrokeKind::Inside);
-    clip.hline(area.x_range(), area.center().y, Stroke::new(1.0, theme.grid));
+    let last = first_core + cores.len() - 1;
+    let name = if cores.len() == 1 { format!("#{first_core}") } else { format!("#{first_core}-{last}") };
+    let mean = mean_series(cores);
+    let average = format!("Avg. {}", format::percent(mean.last().copied()));
+    let caption = style.caption();
+    let centre = group.center().y;
+    painter.text(pos2(group.min.x, centre), Align2::LEFT_BOTTOM, name, style.heading(), theme.foreground);
+    painter.text(pos2(group.min.x, centre), Align2::LEFT_TOP, average, caption, theme.muted);
 
+    let area = Rect::from_min_max(pos2(group.min.x + LABEL_WIDTH, group.min.y), group.max);
+    let clip = painter.with_clip_rect(area.expand(1.0));
+    clip.hline(area.x_range(), area.max.y, Stroke::new(1.0, theme.line));
+    clip.hline(area.x_range(), area.center().y, Stroke::new(1.0, theme.grid));
     let core_stroke = Stroke::new(1.0, theme.muted);
     for core in cores {
         clip.add(Shape::line(graph_points(area, core), core_stroke));
     }
-    let mean = mean_series(cores);
     clip.add(Shape::line(graph_points(area, &mean), Stroke::new(1.6, theme.foreground)));
-
-    let last = first_core + cores.len() - 1;
-    let label = if cores.len() == 1 { format!("#{first_core}") } else { format!("#{first_core}-{last}") };
-    let size = style.fonts.label * 0.8;
-    clip.text(area.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, label, FontId::monospace(size), theme.foreground);
 }
 
 /// Newest sample on the right edge, so the line grows in from the right.
@@ -196,7 +235,7 @@ fn mean_series(cores: &[Vec<f32>]) -> Vec<f32> {
 }
 
 fn memory(painter: &Painter, rect: Rect, memory: Option<MemoryStats>, style: &Style<'_>) {
-    let value = memory.map(|m| format::gib_pair(m.used, m.total));
+    let value = memory.map(|m| format::memory_use(m.used, m.total));
     let (inner, content) = panel::titled(painter, rect, PanelId::Memory.title(), value.as_deref(), style);
     let Some(memory) = memory else {
         no_data(&inner, content, style);
@@ -205,63 +244,91 @@ fn memory(painter: &Painter, rect: Rect, memory: Option<MemoryStats>, style: &St
 
     let bar_height = style.fonts.label * 1.3;
     let swap = Rect::from_min_max(pos2(content.min.x, content.max.y - bar_height), content.max);
-    let grid = Rect::from_min_max(content.min, pos2(content.max.x, swap.min.y - 5.0));
-    dot_grid(&inner, grid, memory.used as f32 / memory.total.max(1) as f32, style);
+    let grid = Rect::from_min_max(content.min, pos2(content.max.x, swap.min.y - 4.0));
+    dot_grid(&inner, grid, memory, style);
     swap_bar(&inner, swap, memory, style);
 }
 
-/// Bright dots for memory in use, dim ones for the rest.
-fn dot_grid(painter: &Painter, area: Rect, used: f32, style: &Style<'_>) {
+/// One dot per slice of memory, scattered like the original: bright for used,
+/// mid for cache, dim for free. Positions are fixed, so a dot only changes
+/// when the share it represents is crossed.
+fn dot_grid(painter: &Painter, area: Rect, memory: MemoryStats, style: &Style<'_>) {
+    let theme = style.theme;
     let columns = (area.width() / DOT_PITCH).floor().max(1.0) as usize;
     let rows = (area.height() / DOT_PITCH).floor().max(1.0) as usize;
-    let filled = lit_dots(used, columns * rows);
-    // Column by column, so the used share reads as a level from the left.
-    for column in 0..columns {
-        for row in 0..rows {
-            let index = column * rows + row;
-            let colour = if index < filled { style.theme.foreground } else { style.theme.line };
+    let total = memory.total.max(1) as f32;
+    let used = memory.used as f32 / total;
+    let cache = (1.0 - used - memory.free as f32 / total).max(0.0);
+    for row in 0..rows {
+        for column in 0..columns {
+            let colour = match dot_state(row * columns + column, used, cache) {
+                DotState::Used => theme.foreground,
+                DotState::Cache => theme.muted,
+                DotState::Free => theme.line,
+            };
             let at = area.min + vec2((column as f32 + 0.5) * DOT_PITCH, (row as f32 + 0.5) * DOT_PITCH);
             painter.circle_filled(at, DOT_RADIUS, colour);
         }
     }
 }
 
-fn lit_dots(used: f32, dots: usize) -> usize {
-    ((used.clamp(0.0, 1.0) * dots as f32).round() as usize).min(dots)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DotState {
+    Used,
+    Cache,
+    Free,
 }
 
+/// Each dot gets a fixed pseudo-random place in 0-1, then falls into a band.
+fn dot_state(index: usize, used: f32, cache: f32) -> DotState {
+    let mut hash = (index as u32).wrapping_add(1).wrapping_mul(0x9E37_79B1);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x85EB_CA77);
+    hash ^= hash >> 13;
+    let place = hash as f32 / u32::MAX as f32;
+    if place < used {
+        DotState::Used
+    } else if place < used + cache {
+        DotState::Cache
+    } else {
+        DotState::Free
+    }
+}
+
+/// A thin track with end ticks and a brighter line for what is in use.
 fn swap_bar(painter: &Painter, area: Rect, memory: MemoryStats, style: &Style<'_>) {
     let theme = style.theme;
-    let size = style.fonts.label * 0.87;
-    let font = FontId::monospace(size);
-    painter.text(area.left_center(), Align2::LEFT_CENTER, "SWAP", font.clone(), theme.muted);
-    if memory.swap_total == 0 {
-        painter.text(area.right_center(), Align2::RIGHT_CENTER, "NONE", font, theme.foreground);
-        return;
-    }
-    let value = format::gib_pair(memory.swap_used, memory.swap_total);
-    painter.text(area.right_center(), Align2::RIGHT_CENTER, &value, font, theme.foreground);
+    let font = style.caption();
+    painter.text(area.left_center(), Align2::LEFT_CENTER, "SWAP", font.clone(), theme.foreground);
+    let value = if memory.swap_total == 0 {
+        "NONE".to_owned()
+    } else {
+        format::gib_pair(memory.swap_used, memory.swap_total)
+    };
+    painter.text(area.right_center(), Align2::RIGHT_CENTER, &value, font.clone(), theme.muted);
 
-    let left = area.min.x + 5.0 * size * CHAR_WIDTH;
-    let right = area.max.x - (value.chars().count() as f32 + 1.0) * size * CHAR_WIDTH;
+    let left = area.min.x + font.size * 3.0;
+    let right = area.max.x - value.chars().count() as f32 * font.size * 0.56;
     if right - left < 16.0 {
         return;
     }
-    let bar = Rect::from_center_size(pos2((left + right) * 0.5, area.center().y), vec2(right - left, 6.0));
-    painter.rect_filled(bar, 0.0, theme.line);
-    let share = (memory.swap_used as f32 / memory.swap_total as f32).clamp(0.0, 1.0);
-    let used = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
-    painter.rect_filled(used, 0.0, theme.foreground);
+    let y = area.center().y;
+    painter.hline(left..=right, y, Stroke::new(1.0, theme.rule));
+    painter.vline(right, (y - 4.0)..=(y + 4.0), Stroke::new(1.0, theme.foreground));
+    let share = (memory.swap_used as f32 / memory.swap_total.max(1) as f32).clamp(0.0, 1.0);
+    painter.hline(left..=left + (right - left) * share, y, Stroke::new(3.0, theme.foreground));
 }
 
 fn processes(painter: &Painter, rect: Rect, rows: &[ProcessRow], style: &Style<'_>) {
-    let (inner, content) = panel::titled(painter, rect, PanelId::Processes.title(), None, style);
+    let columns = "PID | NAME | CPU | MEM";
+    let (inner, content) = panel::titled(painter, rect, PanelId::Processes.title(), Some(columns), style);
     if rows.is_empty() {
         no_data(&inner, content, style);
         return;
     }
     let size = style.fonts.label;
     let font = FontId::monospace(size);
+    let colour = style.theme.foreground;
     let char_width = size * CHAR_WIDTH;
     let line = size * 1.3;
     let cpu_x = content.max.x - 6.0 * char_width;
@@ -271,20 +338,13 @@ fn processes(painter: &Painter, rect: Rect, rows: &[ProcessRow], style: &Style<'
     let name_x = content.min.x + (pid_chars + 1) as f32 * char_width;
     let name_chars = chars_in(cpu_x - 5.0 * char_width - name_x, size);
 
-    let row_text = |y: f32, pid: &str, name: &str, cpu: &str, mem: &str, colour: Color32| {
-        inner.text(pos2(content.min.x, y), Align2::LEFT_TOP, pid, font.clone(), colour);
-        inner.text(pos2(name_x, y), Align2::LEFT_TOP, format::truncate(name, name_chars), font.clone(), colour);
-        inner.text(pos2(cpu_x, y), Align2::RIGHT_TOP, cpu, font.clone(), colour);
-        inner.text(pos2(mem_x, y), Align2::RIGHT_TOP, mem, font.clone(), colour);
-    };
-
-    row_text(content.min.y, "PID", "NAME", "CPU%", "MEM%", style.theme.muted);
-    let shown = ((content.height() / line) as usize).saturating_sub(1);
+    let shown = (content.height() / line) as usize;
     for (i, row) in rows.iter().take(shown).enumerate() {
-        let y = content.min.y + (i + 1) as f32 * line;
-        let cpu = format!("{:.1}", row.cpu);
-        let mem = format!("{:.1}", row.memory);
-        row_text(y, &row.pid.to_string(), &row.name, &cpu, &mem, style.theme.foreground);
+        let y = content.min.y + i as f32 * line;
+        inner.text(pos2(content.min.x, y), Align2::LEFT_TOP, row.pid.to_string(), font.clone(), style.theme.muted);
+        inner.text(pos2(name_x, y), Align2::LEFT_TOP, format::truncate(&row.name, name_chars), font.clone(), colour);
+        inner.text(pos2(cpu_x, y), Align2::RIGHT_TOP, format!("{:.1}", row.cpu), font.clone(), colour);
+        inner.text(pos2(mem_x, y), Align2::RIGHT_TOP, format!("{:.1}", row.memory), font.clone(), colour);
     }
 }
 
@@ -312,7 +372,7 @@ mod tests {
         let mut output = ctx.run_ui(input, |ui| {
             let painter = Painter::new(ui.ctx().clone(), LayerId::background(), window);
             let style = Style { theme: &theme, fonts: &config.fonts };
-            draw(&painter, &compute(window, &config.fonts), snapshot, Local::now(), &style);
+            draw(&painter, &compute(window, &config.fonts), snapshot, Local::now(), false, &style);
         });
         output.textures_delta.clear();
         output.shapes.iter().filter_map(text_of).collect()
@@ -337,13 +397,12 @@ mod tests {
             cpu: CpuStats {
                 model: Some("Some CPU".to_owned()),
                 history: vec![vec![50.0; HISTORY]; 16],
-                average: Some(50.0),
                 temperature: Some(52.0),
                 frequency_mhz: Some(2100),
                 max_frequency_mhz: Some(4600),
                 tasks: Some(321),
             },
-            memory: Some(MemoryStats { total: 8 << 30, used: 4 << 30, swap_total: 2 << 30, swap_used: 1 << 30 }),
+            memory: Some(MemoryStats { total: 8 << 30, used: 4 << 30, free: 1 << 30, swap_total: 2 << 30, swap_used: 1 << 30 }),
             processes: (0..24)
                 .map(|pid| ProcessRow { pid, name: "process".to_owned(), cpu: 1.0, memory: 2.0 })
                 .collect(),
@@ -354,16 +413,16 @@ mod tests {
     fn an_empty_snapshot_shows_na_in_every_panel() {
         let text = render((1600.0, 900.0), &Snapshot::default());
         let na = text.iter().filter(|t| t.as_str() == NOT_AVAILABLE).count();
-        // Uptime, power, three hardware rows, CPU model, graph, temp, clock speed,
-        // tasks, memory and processes.
-        assert_eq!(na, 12, "{text:?}");
-        assert!(text.iter().any(|t| t == "AVG N/A"));
+        // Uptime, power, three hardware values, CPU model, graph, cores, speed,
+        // maximum, temperature, tasks, memory and processes.
+        assert_eq!(na, 14, "{text:?}");
     }
 
     #[test]
     fn a_full_snapshot_shows_its_values() {
         let text = render((1600.0, 900.0), &full_snapshot());
-        for expected in ["84%+", "1d 01:01", "52°C", "2.1/4.6", "321", "4.0/8.0 GiB", "1.0/2.0 GiB", "AVG 50%"] {
+        let expected = ["84%+", "1d 01:01", "52°C", "2.1G", "4.6G", "321", "16", "USING 4.0 OUT OF 8.0 GiB", "1.0/2.0 GiB", "Avg. 50%"];
+        for expected in expected {
             assert!(text.iter().any(|t| t == expected), "{expected} missing from {text:?}");
         }
         assert!(!text.iter().any(|t| t == NOT_AVAILABLE), "{text:?}");
@@ -374,10 +433,10 @@ mod tests {
         let mut one_core = full_snapshot();
         one_core.cpu.history.truncate(1);
         let mut no_swap = full_snapshot();
-        no_swap.memory = Some(MemoryStats { total: 1, used: 2, swap_total: 0, swap_used: 0 });
+        no_swap.memory = Some(MemoryStats { total: 1, used: 2, free: 9, swap_total: 0, swap_used: 0 });
         let mut short_history = full_snapshot();
         short_history.cpu.history = vec![vec![], vec![1.0], vec![1.0, 2.0]];
-        for size in [(1.0, 1.0), (200.0, 150.0), (1024.0, 640.0), (3840.0, 2160.0)] {
+        for size in [(1.0, 1.0), (200.0, 150.0), (1024.0, 680.0), (3840.0, 2160.0)] {
             for snapshot in [&Snapshot::default(), &full_snapshot(), &one_core, &no_swap, &short_history] {
                 render(size, snapshot);
             }
@@ -389,7 +448,7 @@ mod tests {
         let mut snapshot = full_snapshot();
         snapshot.processes[0].name = "edex-rs-long-name".to_owned();
         snapshot.processes[0].pid = 30545;
-        let text = render((1024.0, 640.0), &snapshot);
+        let text = render((1024.0, 680.0), &snapshot);
         assert!(text.iter().any(|t| t.starts_with("edex-r") && t.ends_with('…')), "{text:?}");
     }
 
@@ -400,6 +459,17 @@ mod tests {
         assert_eq!(core_groups(2), vec![0..1, 1..2]);
         assert_eq!(core_groups(7), vec![0..4, 4..7]);
         assert_eq!(core_groups(16), vec![0..8, 8..16]);
+    }
+
+    #[test]
+    fn short_panels_put_the_core_groups_side_by_side() {
+        let tall = graph_areas(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 120.0)), 2);
+        assert!(tall[0].max.y <= tall[1].min.y);
+        assert_eq!(tall[0].width(), 200.0);
+
+        let short = graph_areas(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 40.0)), 2);
+        assert!(short[0].max.x <= short[1].min.x);
+        assert_eq!(short[0].height(), 40.0);
     }
 
     #[test]
@@ -420,11 +490,29 @@ mod tests {
     }
 
     #[test]
-    fn dots_track_memory_use_exactly() {
-        assert_eq!(lit_dots(0.0, 100), 0);
-        assert_eq!(lit_dots(0.5, 100), 50);
-        assert_eq!(lit_dots(1.0, 100), 100);
-        assert_eq!(lit_dots(2.0, 100), 100);
-        assert_eq!(lit_dots(f32::NAN, 100), 0);
+    fn dots_show_each_share_of_memory_in_proportion() {
+        let dots = 5_000;
+        let count = |state| (0..dots).filter(|i| dot_state(*i, 0.3, 0.2) == state).count() as f32 / dots as f32;
+        assert!((count(DotState::Used) - 0.3).abs() < 0.03, "{}", count(DotState::Used));
+        assert!((count(DotState::Cache) - 0.2).abs() < 0.03, "{}", count(DotState::Cache));
+        assert!((0..dots).all(|i| dot_state(i, 1.0, 0.0) == DotState::Used));
+        assert!((0..dots).all(|i| dot_state(i, 0.0, 0.0) == DotState::Free));
+    }
+
+    #[test]
+    fn dots_keep_their_place_as_memory_grows() {
+        for i in 0..1_000 {
+            if dot_state(i, 0.2, 0.0) == DotState::Used {
+                assert_eq!(dot_state(i, 0.5, 0.0), DotState::Used);
+            }
+        }
+    }
+
+    #[test]
+    fn the_clock_can_show_either_format() {
+        use chrono::TimeZone;
+        let afternoon = Local.with_ymd_and_hms(2026, 11, 5, 13, 20, 24).unwrap();
+        assert_eq!(clock_text(afternoon, false), ("13:20:24".to_owned(), None));
+        assert_eq!(clock_text(afternoon, true), ("01:20:24".to_owned(), Some("PM".to_owned())));
     }
 }

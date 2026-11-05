@@ -6,14 +6,16 @@ use egui::Color32;
 pub struct Theme {
     /// Window background.
     pub background: Color32,
-    /// Fill behind panels, a step above the background.
-    pub panel: Color32,
     /// Primary text and bright lines.
     pub foreground: Color32,
     /// Secondary text.
     pub muted: Color32,
-    /// Thin panel outlines.
+    /// Dim marks, such as unused dots and empty tracks.
     pub line: Color32,
+    /// Panel rules and the terminal's outline.
+    pub rule: Color32,
+    /// The dots behind everything. Barely above the background.
+    pub backdrop: Color32,
     /// Reference lines inside graphs: visible, but never competing with data.
     pub grid: Color32,
     /// Halo drawn around outlines. Keep its alpha low.
@@ -58,11 +60,12 @@ impl TerminalColors {
 impl Theme {
     pub fn tron() -> Self {
         Self {
-            background: Color32::from_rgb(0x05, 0x08, 0x0B),
-            panel: Color32::from_rgb(0x09, 0x0F, 0x13),
+            background: Color32::from_rgb(0x05, 0x08, 0x0D),
             foreground: Color32::from_rgb(0xAA, 0xCF, 0xD1),
             muted: Color32::from_rgb(0x6F, 0x92, 0x96),
-            line: Color32::from_rgb(0x3F, 0x5F, 0x64),
+            line: Color32::from_rgb(0x2A, 0x3D, 0x42),
+            rule: Color32::from_rgb(0x57, 0x6C, 0x6F),
+            backdrop: Color32::from_rgb(0x12, 0x1A, 0x20),
             grid: Color32::from_rgb(0x1F, 0x30, 0x36),
             glow: Color32::from_rgba_unmultiplied(0xAA, 0xCF, 0xD1, 16),
             terminal: TerminalColors {
@@ -85,7 +88,7 @@ impl Theme {
                     Color32::from_rgb(0xF0, 0xF8, 0xF8),
                 ],
                 foreground: Color32::from_rgb(0xAA, 0xCF, 0xD1),
-                background: Color32::from_rgb(0x09, 0x0F, 0x13),
+                background: Color32::from_rgb(0x05, 0x08, 0x0D),
                 cursor: Color32::from_rgb(0xAA, 0xCF, 0xD1),
                 selection: Color32::from_rgb(0x2F, 0x52, 0x5A),
             },

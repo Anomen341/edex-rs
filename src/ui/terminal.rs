@@ -120,8 +120,7 @@ impl TerminalView {
             }
         }
 
-        panel::tab_bar(painter, &layout.tabs, &tab_labels(tabs), style);
-        panel::frame(painter, panel, style);
+        panel::terminal_frame(painter, layout.terminal_frame, &layout.tabs, &tab_labels(tabs), style);
         if let Some(session) = tabs.active() {
             let frame = session.frame(&style.theme.terminal, self.focused);
             self.draw_grid(painter, &view, &frame, style.theme);
@@ -237,7 +236,7 @@ impl TerminalView {
         }
         if !tabs.is_open(index) {
             tabs.open(index);
-        } else if index > 0 && panel::tab_close_rect(rects[index]).contains(pos) {
+        } else if index > 0 && panel::tab_close_rect(rects[index]).is_some_and(|close| close.contains(pos)) {
             tabs.close(index);
         } else {
             tabs.select(index);
@@ -539,13 +538,13 @@ fn draw_scroll_position(painter: &Painter, view: &Area, frame: &Frame, theme: &T
 
 fn draw_banner(painter: &Painter, panel: Rect, text: &str, style: &Style<'_>) {
     let height = style.fonts.label * 2.2;
-    let bar = Rect::from_min_max(pos2(panel.min.x + 2.0, panel.max.y - height - 2.0), panel.max - vec2(2.0, 2.0));
+    let bar = Rect::from_min_max(pos2(panel.min.x + 16.0, panel.max.y - height - 2.0), panel.max - vec2(2.0, 2.0));
     painter.rect_filled(bar, 0.0, style.theme.foreground);
     painter.with_clip_rect(bar).text(
         bar.center(),
         Align2::CENTER_CENTER,
         text,
-        style.label(),
+        style.heading(),
         style.theme.background,
     );
 }

@@ -65,7 +65,6 @@ impl Collector {
         snapshot.cpu = CpuStats {
             model: system.cpus().first().and_then(|cpu| clean_cpu_name(cpu.brand())),
             history: self.history.iter().map(|core| core.iter().copied().collect()).collect(),
-            average: (!usage.is_empty()).then(|| usage.iter().sum::<f32>() / usage.len() as f32),
             temperature: self.temperature,
             frequency_mhz,
             max_frequency_mhz,
@@ -74,6 +73,7 @@ impl Collector {
         snapshot.memory = (system.total_memory() > 0).then(|| MemoryStats {
             total: system.total_memory(),
             used: system.used_memory(),
+            free: system.free_memory(),
             swap_total: system.total_swap(),
             swap_used: system.used_swap(),
         });
@@ -82,9 +82,11 @@ impl Collector {
     }
 }
 
-/// Drop trademark marks, which only cost width in a narrow panel.
+/// Drop trademark marks and the rated speed, which only cost width in a narrow
+/// panel. The speed has its own cell.
 fn clean_cpu_name(brand: &str) -> Option<String> {
-    let text = brand.replace("(R)", "").replace("(TM)", "").replace("(tm)", "");
+    let name = brand.split(" @ ").next().unwrap_or(brand);
+    let text = name.replace("(R)", "").replace("(TM)", "").replace("(tm)", "");
     let words: Vec<&str> = text.split_whitespace().collect();
     (!words.is_empty()).then(|| words.join(" "))
 }
@@ -173,7 +175,7 @@ mod tests {
     #[test]
     fn cpu_names_lose_their_trademark_marks() {
         let name = clean_cpu_name("Intel(R) Celeron(R)  N5095A @ 2.00GHz ");
-        assert_eq!(name.as_deref(), Some("Intel Celeron N5095A @ 2.00GHz"));
+        assert_eq!(name.as_deref(), Some("Intel Celeron N5095A"));
         assert_eq!(clean_cpu_name("   "), None);
     }
 
@@ -217,7 +219,7 @@ mod tests {
         let mut collector = Collector::new();
         let snapshot = collector.sample();
         assert!(snapshot.uptime_seconds.is_some());
-        assert!(snapshot.cpu.average.is_some_and(|a| (0.0..=100.0).contains(&a)));
+        assert!(snapshot.cpu.history.iter().flatten().all(|usage| (0.0..=100.0).contains(usage)));
         assert!(snapshot.cpu.tasks.is_some_and(|t| t > 0));
         assert!(!snapshot.cpu.history.is_empty());
         assert!(snapshot.processes.iter().all(|p| p.cpu >= 0.0 && p.memory >= 0.0));

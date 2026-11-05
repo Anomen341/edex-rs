@@ -34,16 +34,15 @@ pub fn percent(value: Option<f32>) -> String {
     value.map_or_else(|| NOT_AVAILABLE.to_owned(), |v| format!("{v:.0}%"))
 }
 
-/// Current and maximum clock in GHz, such as `2.1/4.6`.
-pub fn frequency(current_mhz: Option<u64>, max_mhz: Option<u64>) -> String {
-    if current_mhz.unwrap_or(0) == 0 && max_mhz.unwrap_or(0) == 0 {
-        return NOT_AVAILABLE.to_owned();
-    }
-    let ghz = |mhz: Option<u64>| {
-        mhz.filter(|m| *m > 0)
-            .map_or_else(|| NOT_AVAILABLE.to_owned(), |m| format!("{:.1}", m as f64 / 1000.0))
-    };
-    format!("{}/{}", ghz(current_mhz), ghz(max_mhz))
+/// A clock speed, such as `2.8G`. Zero counts as missing.
+pub fn ghz(mhz: Option<u64>) -> String {
+    mhz.filter(|m| *m > 0)
+        .map_or_else(|| NOT_AVAILABLE.to_owned(), |m| format!("{:.1}G", m as f64 / 1000.0))
+}
+
+/// The memory heading, such as `USING 2.1 OUT OF 3.9 GiB`.
+pub fn memory_use(used: u64, total: u64) -> String {
+    format!("USING {:.1} OUT OF {:.1} GiB", used as f64 / GIB, total as f64 / GIB)
 }
 
 /// `used` of `total` bytes, such as `2.1/3.9 GiB`.
@@ -80,10 +79,8 @@ mod tests {
         assert_eq!(percent(None), "N/A");
         assert_eq!(count(None), "N/A");
         assert_eq!(text(None), "N/A");
-        assert_eq!(frequency(None, None), "N/A");
-        assert_eq!(frequency(Some(0), None), "N/A");
-        assert_eq!(frequency(Some(2900), None), "2.9/N/A");
-        assert_eq!(frequency(Some(0), Some(4600)), "N/A/4.6");
+        assert_eq!(ghz(None), "N/A");
+        assert_eq!(ghz(Some(0)), "N/A");
     }
 
     #[test]
@@ -104,7 +101,8 @@ mod tests {
     #[test]
     fn numbers_read_cleanly() {
         assert_eq!(temperature(Some(51.6)), "52°C");
-        assert_eq!(frequency(Some(2100), Some(4600)), "2.1/4.6");
+        assert_eq!(ghz(Some(2849)), "2.8G");
+        assert_eq!(memory_use(1 << 30, 4 << 30), "USING 1.0 OUT OF 4.0 GiB");
         assert_eq!(gib_pair(2 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024), "2.0/4.0 GiB");
     }
 

@@ -41,7 +41,6 @@ pub struct CpuStats {
     pub model: Option<String>,
     /// Usage from 0 to 100 for each core, oldest sample first.
     pub history: Vec<Vec<f32>>,
-    pub average: Option<f32>,
     pub temperature: Option<f32>,
     pub frequency_mhz: Option<u64>,
     pub max_frequency_mhz: Option<u64>,
@@ -52,6 +51,8 @@ pub struct CpuStats {
 pub struct MemoryStats {
     pub total: u64,
     pub used: u64,
+    /// Memory that is neither in use nor cache.
+    pub free: u64,
     pub swap_total: u64,
     pub swap_used: u64,
 }
