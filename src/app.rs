@@ -1,21 +1,27 @@
 //! Top-level application state and per-frame drawing.
 
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
+use std::time::Duration;
 
+use chrono::{Local, Timelike};
 use egui::{FontData, FontDefinitions, FontFamily};
 
 use crate::config::Config;
+use crate::stats::{self, Snapshot};
 use crate::term::tabs::Tabs;
 use crate::theme::Theme;
 use crate::ui::panel::Style;
 use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
-use crate::ui::{self, layout};
+use crate::ui::{self, layout, monitor};
 
 pub struct EdexApp {
     config: Config,
     theme: Theme,
     tabs: Tabs,
     terminal: TerminalView,
+    stats: Receiver<Snapshot>,
+    snapshot: Snapshot,
 }
 
 impl EdexApp {
@@ -27,13 +33,34 @@ impl EdexApp {
         let theme = Theme::tron();
         let tabs = Tabs::new(&config, &theme.terminal, &cc.egui_ctx);
         let terminal = TerminalView::new(config.fonts.terminal);
-        Self { config, theme, tabs, terminal }
+        Self { config, theme, tabs, terminal, stats: stats::spawn(), snapshot: Snapshot::default() }
+    }
+
+    /// Take the newest snapshot without waiting. If the stats thread has gone,
+    /// stale numbers would mislead, so the panels fall back to N/A.
+    fn receive_stats(&mut self) {
+        loop {
+            match self.stats.try_recv() {
+                Ok(snapshot) => self.snapshot = snapshot,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.snapshot = Snapshot::default();
+                    return;
+                }
+            }
+        }
     }
 }
 
 impl eframe::App for EdexApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.receive_stats();
+        let now = Local::now();
+        // Wake exactly on the next second so the clock never skips a digit.
+        let to_next_second = 1_000 - u64::from(now.nanosecond() / 1_000_000).min(999);
+        ctx.request_repaint_after(Duration::from_millis(to_next_second));
+
         let window = ctx.content_rect();
         let painter = ui.painter();
         painter.rect_filled(window, 0.0, self.theme.background);
@@ -41,6 +68,7 @@ impl eframe::App for EdexApp {
         let layout = layout::compute(window, &self.config.fonts);
         let style = Style { theme: &self.theme, fonts: &self.config.fonts };
         ui::draw_panels(painter, &layout, &style);
+        monitor::draw(painter, &layout, &self.snapshot, now, &style);
         self.terminal.show(&ctx, painter, &layout, &mut self.tabs, &style);
     }
 

@@ -3,6 +3,7 @@
 
 mod app;
 mod config;
+mod stats;
 mod term;
 mod theme;
 mod ui;

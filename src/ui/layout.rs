@@ -66,18 +66,12 @@ impl PanelId {
     /// What this panel will show, printed inside its placeholder.
     pub fn plan(self) -> &'static str {
         match self {
-            Self::Clock => "",
-            Self::System => "DATE / UPTIME / OS / POWER",
-            Self::Hardware => "MANUFACTURER / MODEL / CHASSIS",
-            Self::Cpu => "PER-CORE GRAPHS IN TWO GROUPS / TEMP / FREQ / TASKS",
-            Self::Memory => "DOT GRID + SWAP BAR",
-            Self::Processes => "PID / NAME / CPU% / MEM%",
-            Self::Terminal => "SHELL SESSION",
             Self::Files => "CURRENT DIRECTORY OF ACTIVE TERMINAL",
             Self::Keyboard => "LIVE KEY HIGHLIGHT",
             Self::Network => "STATE / INTERFACE / IPV4 / EXTERNAL IP / LATENCY",
             Self::Globe => "WIREFRAME GLOBE + CONNECTION POINTS",
             Self::Traffic => "UP/DOWN GRAPH + TOTALS",
+            _ => "",
         }
     }
 }
@@ -120,7 +114,7 @@ pub fn compute(window: Rect, fonts: &FontSizes) -> Layout {
         &[
             Slot { id: PanelId::Clock, min: fonts.clock * 1.25, weight: 0.5 },
             Slot { id: PanelId::System, min: panel_top + body_row * 2.0, weight: 0.5 },
-            Slot { id: PanelId::Hardware, min: panel_top + body_row * 2.0, weight: 0.5 },
+            Slot { id: PanelId::Hardware, min: panel_top + fonts.label * 3.75, weight: 0.5 },
             Slot { id: PanelId::Cpu, min: panel_top + body_row * 4.0, weight: 3.5 },
             Slot { id: PanelId::Memory, min: panel_top + body_row * 3.0, weight: 2.0 },
             Slot { id: PanelId::Processes, min: panel_top + body_row * 3.0, weight: 3.0 },

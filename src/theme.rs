@@ -14,6 +14,8 @@ pub struct Theme {
     pub muted: Color32,
     /// Thin panel outlines.
     pub line: Color32,
+    /// Reference lines inside graphs: visible, but never competing with data.
+    pub grid: Color32,
     /// Halo drawn around outlines. Keep its alpha low.
     pub glow: Color32,
     pub terminal: TerminalColors,
@@ -61,6 +63,7 @@ impl Theme {
             foreground: Color32::from_rgb(0xAA, 0xCF, 0xD1),
             muted: Color32::from_rgb(0x6F, 0x92, 0x96),
             line: Color32::from_rgb(0x3F, 0x5F, 0x64),
+            grid: Color32::from_rgb(0x1F, 0x30, 0x36),
             glow: Color32::from_rgba_unmultiplied(0xAA, 0xCF, 0xD1, 16),
             terminal: TerminalColors {
                 ansi: [
