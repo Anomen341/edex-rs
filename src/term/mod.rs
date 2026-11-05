@@ -3,8 +3,9 @@
 
 pub mod frame;
 pub mod input;
+mod osc;
 mod platform;
 pub mod session;
 pub mod tabs;
 
-pub use platform::{CTRL_C_COPIES_SELECTION, CTRL_V_PASTES};
+pub use platform::{cd_command, quote_path, CTRL_C_COPIES_SELECTION, CTRL_V_PASTES};

@@ -8,7 +8,7 @@ use egui::{
     pos2, vec2, Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Shape, Stroke,
 };
 
-use super::layout::{Column, PanelId};
+use super::layout::Column;
 use crate::config::FontSizes;
 use crate::theme::Theme;
 
@@ -41,9 +41,6 @@ impl Style<'_> {
         FontId::new(self.fonts.label * 0.95, FontFamily::Name(DISPLAY_FONT.into()))
     }
 
-    fn body(&self) -> FontId {
-        FontId::monospace(self.fonts.body)
-    }
 }
 
 /// The faint dot grid behind everything, as one mesh for the whole window.
@@ -181,21 +178,6 @@ pub fn terminal_frame(painter: &Painter, outer: Rect, tabs: &[Rect], labels: &[T
             clip.text(close.center(), Align2::CENTER_CENTER, "x", style.heading(), colour);
         }
     }
-}
-
-/// Text standing in for a panel that a later phase makes live.
-pub fn placeholder(painter: &Painter, id: PanelId, rect: Rect, style: &Style<'_>) {
-    let (inner, content) = if id == PanelId::Keyboard {
-        // The keyboard has no heading or rule in the final design.
-        (painter.with_clip_rect(rect), rect)
-    } else {
-        titled(painter, rect, id.title(), None, style)
-    };
-    let wrap = content.width();
-    let galley = inner.layout(id.plan().to_owned(), style.body(), style.theme.muted, wrap);
-    // Centred, but never above the content area in a short panel.
-    let at = (content.center() - galley.size() * 0.5).max(content.min);
-    inner.galley(at, galley, style.theme.muted);
 }
 
 /// The large clock, with digits in even cells so it never shifts as they

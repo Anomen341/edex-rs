@@ -68,15 +68,6 @@ impl PanelId {
             Self::Traffic => "NETWORK TRAFFIC",
         }
     }
-
-    /// What this panel will show, printed inside its placeholder.
-    pub fn plan(self) -> &'static str {
-        match self {
-            Self::Files => "CURRENT DIRECTORY OF ACTIVE TERMINAL",
-            Self::Keyboard => "LIVE KEY HIGHLIGHT",
-            _ => "",
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

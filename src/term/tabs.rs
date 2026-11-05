@@ -44,8 +44,8 @@ impl Tabs {
 
     pub fn open(&mut self, index: usize) {
         let Some(size) = self.size else { return };
-        let command = shell_command(self.shell.as_deref());
-        let session = Session::spawn(command, size, self.scrollback, &self.colours, &self.ctx);
+        let launch = shell_command(self.shell.as_deref());
+        let session = Session::spawn(launch, size, self.scrollback, &self.colours, &self.ctx);
         self.slots[index] = Some(session);
         self.active = index;
     }

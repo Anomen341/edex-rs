@@ -3,6 +3,7 @@
 
 mod app;
 mod config;
+mod files;
 mod net;
 mod stats;
 mod term;

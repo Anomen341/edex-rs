@@ -14,6 +14,8 @@ use crate::stats::{self, Snapshot};
 use crate::term::tabs::Tabs;
 use crate::theme::Theme;
 use crate::ui::panel::{Style, DISPLAY_FONT};
+use crate::ui::files::FilesView;
+use crate::ui::keyboard::KeyboardView;
 use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
 use crate::ui::{self, layout, monitor, network};
 
@@ -32,6 +34,8 @@ pub struct EdexApp {
     theme: Theme,
     tabs: Tabs,
     terminal: TerminalView,
+    files: FilesView,
+    keyboard: KeyboardView,
     stats: Receiver<Snapshot>,
     snapshot: Snapshot,
     net: Receiver<NetSnapshot>,
@@ -58,6 +62,8 @@ impl EdexApp {
             theme,
             tabs,
             terminal,
+            files: FilesView::new(&cc.egui_ctx),
+            keyboard: KeyboardView::default(),
             stats: stats::spawn(),
             snapshot: Snapshot::default(),
             net,
@@ -103,6 +109,8 @@ impl eframe::App for EdexApp {
         monitor::draw(painter, &layout, &self.snapshot, now, self.config.twelve_hour_clock, self.animate, &style);
         let time = ctx.input(|i| i.time);
         network::draw(painter, &layout, &self.net_snapshot, time, self.animate, &style);
+        self.files.show(&ctx, painter, &layout, &self.tabs, &style);
+        self.keyboard.show(&ctx, painter, &layout, self.animate, &style);
         self.terminal.show(&ctx, painter, &layout, &mut self.tabs, &style);
     }
 

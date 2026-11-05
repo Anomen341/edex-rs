@@ -6,10 +6,11 @@
 //! write on the UI thread would freeze the whole window.
 
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -20,9 +21,13 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 
 use super::frame::{self, Frame};
 use super::input;
+use super::osc::OscScanner;
+use super::platform::{self, Launch, ShellKind};
 use crate::theme::TerminalColors;
 
 const READ_BUFFER: usize = 64 * 1024;
+/// How often the shell's folder is checked. Quick enough to feel instant.
+const CWD_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridSize {
@@ -70,6 +75,8 @@ struct Shared {
     ended: Mutex<Option<Ended>>,
     clipboard: Mutex<Option<String>>,
     size: Mutex<GridSize>,
+    /// The shell's folder, once anything has reported it.
+    cwd: Mutex<Option<PathBuf>>,
 }
 
 /// Receives requests the terminal makes while parsing output. Runs on the
@@ -123,24 +130,30 @@ pub struct Session {
     shared: Arc<Shared>,
     killer: Option<Box<dyn ChildKiller + Send + Sync>>,
     size: GridSize,
+    shell: ShellKind,
+    cwd_file: Option<PathBuf>,
 }
 
 impl Session {
     /// Start `command`. A failure to start is reported through [`Self::ended`]
     /// rather than an error, so the tab can show it and offer a retry.
     pub fn spawn(
-        command: CommandBuilder,
+        launch: Launch,
         size: GridSize,
         scrollback: usize,
         colours: &TerminalColors,
         ctx: &egui::Context,
     ) -> Self {
+        let Launch { command, shell, cwd_file } = launch;
         let (input, input_rx) = channel();
         let (resize, resize_rx) = channel();
+        // Where the shell starts, for tracking methods that only see changes.
+        let start_cwd = cwd_file.as_ref().and(command.get_cwd()).map(PathBuf::from);
         let shared = Arc::new(Shared {
             ended: Mutex::new(None),
             clipboard: Mutex::new(None),
             size: Mutex::new(size),
+            cwd: Mutex::new(start_cwd),
         });
         let listener = Listener {
             input: input.clone(),
@@ -150,7 +163,14 @@ impl Session {
         let config = Config { scrolling_history: scrollback, ..Config::default() };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener)));
 
-        let threads = Threads { term: term.clone(), input_rx, resize_rx, shared: shared.clone(), ctx: ctx.clone() };
+        let threads = Threads {
+            term: term.clone(),
+            input_rx,
+            resize_rx,
+            shared: shared.clone(),
+            ctx: ctx.clone(),
+            cwd_file: cwd_file.clone(),
+        };
         let killer = match start(command, size, threads) {
             Ok(killer) => Some(killer),
             Err(error) => {
@@ -159,7 +179,7 @@ impl Session {
                 None
             }
         };
-        Self { term, input, resize, shared, killer, size }
+        Self { term, input, resize, shared, killer, size, shell, cwd_file }
     }
 
     pub fn send(&self, bytes: Vec<u8>) {
@@ -201,6 +221,15 @@ impl Session {
         lock(&self.shared.ended).clone()
     }
 
+    /// The shell's current folder, if it can be known.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        lock(&self.shared.cwd).clone()
+    }
+
+    pub fn shell(&self) -> ShellKind {
+        self.shell
+    }
+
     /// Text a program asked to put on the clipboard, if any.
     pub fn take_clipboard(&self) -> Option<String> {
         lock(&self.shared.clipboard).take()
@@ -209,6 +238,9 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        if let Some(file) = &self.cwd_file {
+            let _ = std::fs::remove_file(file);
+        }
         // Once the shell has gone its process id may belong to something else.
         if self.ended().is_some() {
             return;
@@ -225,6 +257,7 @@ struct Threads {
     resize_rx: Receiver<GridSize>,
     shared: Arc<Shared>,
     ctx: egui::Context,
+    cwd_file: Option<PathBuf>,
 }
 
 fn start(
@@ -244,10 +277,15 @@ fn start(
     let writer = pair.master.take_writer().map_err(text)?;
     let master = pair.master;
 
-    let Threads { term, input_rx, resize_rx, shared, ctx } = threads;
+    let pid = child.process_id();
+    let Threads { term, input_rx, resize_rx, shared, ctx, cwd_file } = threads;
 
     let read_ctx = ctx.clone();
-    thread::spawn(move || read_loop(reader, term, read_ctx));
+    let read_shared = shared.clone();
+    thread::spawn(move || read_loop(reader, term, &read_shared, read_ctx));
+    let cwd_shared = shared.clone();
+    let cwd_ctx = ctx.clone();
+    thread::spawn(move || cwd_loop(pid, cwd_file.as_deref(), &cwd_shared, &cwd_ctx));
     thread::spawn(move || write_loop(writer, input_rx));
     thread::spawn(move || resize_loop(master, resize_rx));
     thread::spawn(move || {
@@ -265,8 +303,33 @@ fn start(
     Ok(killer)
 }
 
-fn read_loop(mut reader: Box<dyn Read + Send>, term: SharedTerm, ctx: egui::Context) {
+/// Follow the shell's folder through the file or the system. Reports found in
+/// its output arrive separately, so only a change here overrides them.
+fn cwd_loop(pid: Option<u32>, file: Option<&Path>, shared: &Shared, ctx: &egui::Context) {
+    let mut last = None;
+    while lock(&shared.ended).is_none() {
+        let current = read_cwd(pid, file);
+        if current.is_some() && current != last {
+            last.clone_from(&current);
+            *lock(&shared.cwd) = current;
+            ctx.request_repaint();
+        }
+        thread::sleep(CWD_POLL);
+    }
+}
+
+fn read_cwd(pid: Option<u32>, file: Option<&Path>) -> Option<PathBuf> {
+    if let Some(file) = file {
+        let text = std::fs::read_to_string(file).ok()?;
+        let path = PathBuf::from(text.trim());
+        return path.is_absolute().then_some(path);
+    }
+    platform::process_cwd(pid?)
+}
+
+fn read_loop(mut reader: Box<dyn Read + Send>, term: SharedTerm, shared: &Shared, ctx: egui::Context) {
     let mut parser: Processor = Processor::new();
+    let mut scanner = OscScanner::new();
     let mut buffer = vec![0; READ_BUFFER];
     loop {
         let count = match reader.read(&mut buffer) {
@@ -276,6 +339,9 @@ fn read_loop(mut reader: Box<dyn Read + Send>, term: SharedTerm, ctx: egui::Cont
             // Linux reports a closed PTY as an error rather than end of file.
             Err(_) => return,
         };
+        if let Some(path) = scanner.feed(&buffer[..count]) {
+            *lock(&shared.cwd) = Some(path);
+        }
         {
             let mut term = term.lock();
             parser.advance(&mut *term, &buffer[..count]);
@@ -322,7 +388,7 @@ mod tests {
         command.args(["-c", script]);
         command.env("TERM", "xterm-256color");
         let colours = Theme::tron().terminal;
-        Session::spawn(command, size(40, 10), 100, &colours, &egui::Context::default())
+        Session::spawn(Launch::plain(command), size(40, 10), 100, &colours, &egui::Context::default())
     }
 
     fn screen(session: &Session) -> String {
@@ -369,7 +435,7 @@ mod tests {
     fn a_missing_program_is_reported_not_fatal() {
         let colours = Theme::tron().terminal;
         let command = CommandBuilder::new("/nonexistent/shell");
-        let session = Session::spawn(command, size(40, 10), 100, &colours, &egui::Context::default());
+        let session = Session::spawn(Launch::plain(command), size(40, 10), 100, &colours, &egui::Context::default());
         let ended = session.ended().expect("spawn failure is reported straight away");
         assert!(ended.message.contains("COULD NOT START"), "{}", ended.message);
         session.send(b"ignored".to_vec());
@@ -400,6 +466,35 @@ mod tests {
             session.send(vec![b'x'; 64 * 1024]);
         }
         assert!(start.elapsed() < Duration::from_secs(1), "send blocked for {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_shell_changing_folder_is_followed() {
+        let session = sh("cd /usr; sleep 1; cd /tmp; sleep 5");
+        wait_for("/usr", || session.cwd().as_deref() == Some(Path::new("/usr")));
+        wait_for("/tmp", || session.cwd().as_deref() == Some(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn a_folder_report_in_the_output_is_followed() {
+        let session = sh("sleep 0.6; printf '\\033]7;file://h/reported/path\\007'; sleep 5");
+        wait_for("report", || session.cwd().as_deref() == Some(Path::new("/reported/path")));
+    }
+
+    #[test]
+    fn a_hook_file_is_followed_and_removed_with_the_session() {
+        let file = std::env::temp_dir().join(format!("edex-hook-{}.cwd", std::process::id()));
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 5"]);
+        command.cwd("/usr");
+        let launch = Launch { command, shell: ShellKind::PowerShell, cwd_file: Some(file.clone()) };
+        let colours = Theme::tron().terminal;
+        let session = Session::spawn(launch, size(40, 10), 100, &colours, &egui::Context::default());
+        assert_eq!(session.cwd().as_deref(), Some(Path::new("/usr")), "known from the start");
+        std::fs::write(&file, "/var/lib").unwrap();
+        wait_for("file", || session.cwd().as_deref() == Some(Path::new("/var/lib")));
+        drop(session);
+        assert!(!file.exists());
     }
 
     #[test]
