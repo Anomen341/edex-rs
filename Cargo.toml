@@ -1,0 +1,27 @@
+[package]
+name = "edex-rs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A native sci-fi terminal and system monitor"
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+eframe = { version = "0.37.0", features = ["glow"] }
+egui = "0.37.0"
+portable-pty = "0.9.0"
+rfd = "0.17.2"
+
+# Dependencies are optimised even in dev builds: unoptimised software rendering
+# is unusably slow. Debug info is trimmed because the build VM's disk is small.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
