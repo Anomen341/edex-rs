@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Local, Timelike};
+use eframe::glow::HasContext;
 use egui::{FontData, FontDefinitions, FontFamily};
 
 use crate::config::Config;
@@ -16,8 +17,10 @@ use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
 use crate::ui::{self, layout, monitor};
 
 /// Smooth graphs redraw about 30 times a second. That is nothing on a GPU, but
-/// heavy on a software renderer, so measured frame cost decides. The two limits
-/// keep it from flipping back and forth around a single value.
+/// heavy on a software renderer, so they are off there. Frame cost is also
+/// watched, for slow machines with a real GPU. It only counts this thread, not
+/// a renderer's own threads, so it cannot replace the renderer check. The two
+/// limits keep it from flipping back and forth around a single value.
 const ANIMATE_DELAY: Duration = Duration::from_millis(33);
 const STILL_DELAY: Duration = Duration::from_millis(500);
 const FRAME_COST_TOO_HIGH: f32 = 0.012;
@@ -30,6 +33,7 @@ pub struct EdexApp {
     terminal: TerminalView,
     stats: Receiver<Snapshot>,
     snapshot: Snapshot,
+    software_renderer: bool,
     /// Recent CPU seconds per frame, smoothed.
     frame_cost: f32,
     animate: bool,
@@ -44,13 +48,14 @@ impl EdexApp {
         let theme = Theme::tron();
         let tabs = Tabs::new(&config, &theme.terminal, &cc.egui_ctx);
         let terminal = TerminalView::new(config.fonts.terminal);
-        Self { config, theme, tabs, terminal, stats: stats::spawn(), snapshot: Snapshot::default(), frame_cost: 0.0, animate: true }
+        let software_renderer = uses_software_renderer(cc);
+        Self { config, theme, tabs, terminal, stats: stats::spawn(), snapshot: Snapshot::default(), software_renderer, frame_cost: 0.0, animate: !software_renderer }
     }
 
     /// Update the smoothed frame cost and decide whether to animate.
     fn track_frame_cost(&mut self, cost: f32) {
         self.frame_cost = self.frame_cost * 0.9 + cost * 0.1;
-        self.animate = next_animate(self.animate, self.frame_cost);
+        self.animate = !self.software_renderer && next_animate(self.animate, self.frame_cost);
     }
 
     /// Take the newest snapshot without waiting. If the stats thread has gone,
@@ -98,6 +103,23 @@ impl eframe::App for EdexApp {
     }
 }
 
+/// True when drawing runs on the CPU, as with Mesa's llvmpipe or Windows' WARP.
+fn uses_software_renderer(cc: &eframe::CreationContext<'_>) -> bool {
+    if let Some(state) = &cc.wgpu_render_state {
+        return state.adapter.get_info().device_type == eframe::wgpu::DeviceType::Cpu;
+    }
+    cc.gl.as_ref().is_some_and(|gl| {
+        // SAFETY: eframe made this context current before creating the app.
+        let name = unsafe { gl.get_parameter_string(eframe::glow::RENDERER) };
+        is_software_gl(&name)
+    })
+}
+
+fn is_software_gl(renderer: &str) -> bool {
+    let name = renderer.to_ascii_lowercase();
+    ["llvmpipe", "softpipe", "software", "swrast", "gdi generic"].iter().any(|word| name.contains(word))
+}
+
 fn next_animate(animate: bool, frame_cost: f32) -> bool {
     if animate {
         frame_cost < FRAME_COST_TOO_HIGH
@@ -135,6 +157,14 @@ fn install_fonts(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn software_opengl_drivers_are_recognised() {
+        assert!(is_software_gl("llvmpipe (LLVM 19.1.7, 256 bits)"));
+        assert!(is_software_gl("GDI Generic"));
+        assert!(!is_software_gl("NVIDIA GeForce RTX 3080/PCIe/SSE2"));
+        assert!(!is_software_gl("AMD Radeon Graphics"));
+    }
 
     #[test]
     fn animation_stops_on_slow_frames_and_needs_a_clear_margin_to_return() {
