@@ -15,7 +15,9 @@ maxminddb = "0.32.0"
 netstat2 = "0.11.2"
 portable-pty = "0.9.0"
 rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
 sysinfo = { version = "0.40.1", default-features = false, features = ["system", "component", "network"] }
+toml = "1.2.0"
 
 # Dependencies are optimised even in dev builds: unoptimised software rendering
 # is unusably slow. Debug info is trimmed because the build VM's disk is small.

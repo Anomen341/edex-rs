@@ -3,7 +3,7 @@
 
 use egui::{pos2, vec2, Pos2, Rect, Vec2};
 
-use crate::config::FontSizes;
+use crate::config::{FontSizes, Panels};
 
 pub const MIN_WINDOW: Vec2 = vec2(1024.0, 680.0);
 pub const TAB_COUNT: usize = 5;
@@ -52,6 +52,23 @@ pub enum PanelId {
 }
 
 impl PanelId {
+    fn shown(self, panels: &Panels) -> bool {
+        match self {
+            Self::Clock => panels.clock,
+            Self::System => panels.system,
+            Self::Hardware => panels.hardware,
+            Self::Cpu => panels.cpu,
+            Self::Memory => panels.memory,
+            Self::Processes => panels.processes,
+            Self::Terminal => true,
+            Self::Files => panels.files,
+            Self::Keyboard => panels.keyboard,
+            Self::Network => panels.network,
+            Self::Globe => panels.globe,
+            Self::Traffic => panels.traffic,
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             Self::Clock => "CLOCK",
@@ -87,61 +104,77 @@ struct Slot {
     weight: f32,
 }
 
-pub fn compute(window: Rect, fonts: &FontSizes) -> Layout {
+pub fn compute(window: Rect, fonts: &FontSizes, shown: &Panels) -> Layout {
     let area = window.shrink(MARGIN);
-    let side = (window.width() * SIDE_COLUMN_SHARE).clamp(SIDE_COLUMN_MIN, SIDE_COLUMN_MAX);
-    let share = if window.height() < SHORT_WINDOW { BOTTOM_SHARE_SHORT } else { BOTTOM_SHARE };
-    let bottom_height = window.height() * share;
     let label_row = fonts.label * 1.5;
     let body_row = fonts.body * 1.3;
     let caption_row = fonts.label * 1.25;
     let panel_top = label_row + 8.0;
 
+    let left_slots: Vec<Slot> = [
+        Slot { id: PanelId::Clock, min: fonts.clock * 0.77, weight: 0.3 },
+        Slot { id: PanelId::System, min: caption_row + body_row + 6.0, weight: 0.1 },
+        Slot { id: PanelId::Hardware, min: caption_row + body_row + 6.0, weight: 0.1 },
+        Slot { id: PanelId::Cpu, min: panel_top + caption_row + body_row + 40.0, weight: 2.0 },
+        Slot { id: PanelId::Memory, min: panel_top + caption_row + 28.0, weight: 0.8 },
+        Slot { id: PanelId::Processes, min: panel_top + fonts.label * 2.8, weight: 4.0 },
+    ]
+    .into_iter()
+    .filter(|slot| slot.id.shown(shown))
+    .collect();
+    let right_slots: Vec<Slot> = [
+        Slot { id: PanelId::Network, min: panel_top + caption_row * 2.0 + body_row, weight: 0.0 },
+        Slot { id: PanelId::Globe, min: panel_top + caption_row + body_row * 4.0, weight: 3.0 },
+        Slot { id: PanelId::Traffic, min: panel_top + caption_row + body_row * 3.0, weight: 2.0 },
+    ]
+    .into_iter()
+    .filter(|slot| slot.id.shown(shown))
+    .collect();
+
+    // An empty column takes no width, and an empty strip no height, so the
+    // terminal grows into the space.
+    let side = (window.width() * SIDE_COLUMN_SHARE).clamp(SIDE_COLUMN_MIN, SIDE_COLUMN_MAX);
+    let left_width = if left_slots.is_empty() { 0.0 } else { side };
+    let right_width = if right_slots.is_empty() { 0.0 } else { side };
+    let left_gap = if left_slots.is_empty() { 0.0 } else { COLUMN_GAP };
+    let right_gap = if right_slots.is_empty() { 0.0 } else { COLUMN_GAP };
+    let has_strip = shown.files || shown.keyboard;
+    let share = if window.height() < SHORT_WINDOW { BOTTOM_SHARE_SHORT } else { BOTTOM_SHARE };
+    let bottom_height = if has_strip { window.height() * share + GAP } else { 0.0 };
+
     // The side columns and terminal share the top; the strip spans the window.
-    let top = Rect::from_min_max(area.min, pos2(area.max.x, area.max.y - bottom_height - GAP));
+    let top = Rect::from_min_max(area.min, pos2(area.max.x, area.max.y - bottom_height));
     let bottom = Rect::from_min_max(pos2(area.min.x, top.max.y + GAP), area.max);
 
-    let left = Rect::from_min_size(top.min, vec2(side, top.height()));
-    let right = Rect::from_min_size(pos2(top.max.x - side, top.min.y), vec2(side, top.height()));
+    let left = Rect::from_min_size(top.min, vec2(left_width, top.height()));
+    let right = Rect::from_min_size(pos2(top.max.x - right_width, top.min.y), vec2(right_width, top.height()));
     let (left_header, left_body) = split_top(left, label_row);
     let (right_header, right_body) = split_top(right, label_row);
 
     let mut panels = Vec::with_capacity(12);
-    stack(
-        left_body,
-        &[
-            Slot { id: PanelId::Clock, min: fonts.clock * 0.77, weight: 0.3 },
-            Slot { id: PanelId::System, min: caption_row + body_row + 6.0, weight: 0.1 },
-            Slot { id: PanelId::Hardware, min: caption_row + body_row + 6.0, weight: 0.1 },
-            Slot { id: PanelId::Cpu, min: panel_top + caption_row + body_row + 40.0, weight: 2.0 },
-            Slot { id: PanelId::Memory, min: panel_top + caption_row + 28.0, weight: 0.8 },
-            Slot { id: PanelId::Processes, min: panel_top + fonts.label * 2.8, weight: 4.0 },
-        ],
-        &mut panels,
-    );
-    stack(
-        right_body,
-        &[
-            Slot { id: PanelId::Network, min: panel_top + caption_row * 2.0 + body_row, weight: 0.0 },
-            Slot { id: PanelId::Globe, min: panel_top + caption_row + body_row * 4.0, weight: 3.0 },
-            Slot { id: PanelId::Traffic, min: panel_top + caption_row + body_row * 3.0, weight: 2.0 },
-        ],
-        &mut panels,
-    );
+    stack(left_body, &left_slots, &mut panels);
+    stack(right_body, &right_slots, &mut panels);
 
     let terminal_frame = Rect::from_min_max(
-        pos2(left.max.x + COLUMN_GAP, left_body.min.y),
-        pos2(right.min.x - COLUMN_GAP, top.max.y),
+        pos2(left.max.x + left_gap, left_body.min.y),
+        pos2(right.min.x - right_gap, top.max.y),
     );
     let tab_height = fonts.label * 1.9;
     let tab_strip = Rect::from_min_size(terminal_frame.min, vec2(terminal_frame.width(), tab_height));
     let terminal = Rect::from_min_max(pos2(terminal_frame.min.x, tab_strip.max.y + 1.0), terminal_frame.max);
     panels.push((PanelId::Terminal, terminal));
 
-    let files = Rect::from_min_size(bottom.min, vec2(bottom.width() * FILES_SHARE, bottom.height()));
-    let keyboard = Rect::from_min_max(pos2(files.max.x + COLUMN_GAP, bottom.min.y), bottom.max);
-    panels.push((PanelId::Files, files));
-    panels.push((PanelId::Keyboard, keyboard));
+    match (shown.files, shown.keyboard) {
+        (true, true) => {
+            let files = Rect::from_min_size(bottom.min, vec2(bottom.width() * FILES_SHARE, bottom.height()));
+            let keyboard = Rect::from_min_max(pos2(files.max.x + COLUMN_GAP, bottom.min.y), bottom.max);
+            panels.push((PanelId::Files, files));
+            panels.push((PanelId::Keyboard, keyboard));
+        }
+        (true, false) => panels.push((PanelId::Files, bottom)),
+        (false, true) => panels.push((PanelId::Keyboard, bottom)),
+        (false, false) => {}
+    }
 
     let first_tab = FIRST_TAB_MIN_CHARS * fonts.label * 0.6;
     Layout {
@@ -180,10 +213,13 @@ fn tab_slots(strip: Rect, first_min: f32) -> Vec<Rect> {
 /// what remains. If the minimums do not fit, all shrink in proportion so that
 /// panels never overlap or leave the window.
 fn stack(column: Rect, slots: &[Slot], out: &mut Vec<(PanelId, Rect)>) {
+    if slots.is_empty() {
+        return;
+    }
     let gaps = GAP * (slots.len() - 1) as f32;
     let available = (column.height() - gaps).max(0.0);
     let min_total: f32 = slots.iter().map(|s| s.min).sum();
-    let weight_total: f32 = slots.iter().map(|s| s.weight).sum();
+    let weight_total: f32 = slots.iter().map(|s| s.weight).sum::<f32>().max(0.01);
     let spare = (available - min_total).max(0.0);
     let shrink = (available / min_total).min(1.0);
 
@@ -213,7 +249,7 @@ mod tests {
 
     fn layout_at(size: (f32, f32)) -> (Rect, Layout) {
         let window = Rect::from_min_size(Pos2::ZERO, vec2(size.0, size.1));
-        (window, compute(window, &Config::default().fonts))
+        (window, compute(window, &Config::default().fonts, &Panels::default()))
     }
 
     fn panel(layout: &Layout, id: PanelId) -> Rect {
@@ -314,6 +350,66 @@ mod tests {
         assert!(panel(&layout, PanelId::Terminal).max.y <= panel(&layout, PanelId::Files).min.y);
     }
 
+    fn with(change: impl Fn(&mut Panels)) -> (Rect, Layout) {
+        let window = Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 900.0));
+        let mut panels = Panels::default();
+        change(&mut panels);
+        (window, compute(window, &Config::default().fonts, &panels))
+    }
+
+    #[test]
+    fn a_hidden_panel_gives_its_space_to_its_column() {
+        let (_, all) = layout_at((1600.0, 900.0));
+        let (_, fewer) = with(|p| p.memory = false);
+        assert!(fewer.panels.iter().all(|(id, _)| *id != PanelId::Memory));
+        assert!(panel(&fewer, PanelId::Cpu).height() > panel(&all, PanelId::Cpu).height());
+    }
+
+    #[test]
+    fn hiding_a_whole_column_widens_the_terminal() {
+        let (_, all) = layout_at((1600.0, 900.0));
+        let (_, fewer) = with(|p| {
+            p.network = false;
+            p.globe = false;
+            p.traffic = false;
+        });
+        assert!(panel(&fewer, PanelId::Terminal).width() > panel(&all, PanelId::Terminal).width() + 200.0);
+    }
+
+    #[test]
+    fn hiding_the_strip_makes_the_terminal_taller() {
+        let (window, fewer) = with(|p| {
+            p.files = false;
+            p.keyboard = false;
+        });
+        assert!(panel(&fewer, PanelId::Terminal).max.y > window.max.y - 12.0);
+    }
+
+    #[test]
+    fn one_strip_panel_takes_the_whole_width() {
+        let (window, fewer) = with(|p| p.files = false);
+        assert_eq!(panel(&fewer, PanelId::Keyboard).width(), window.width() - MARGIN * 2.0);
+    }
+
+    #[test]
+    fn hiding_everything_leaves_a_full_window_terminal() {
+        let (window, only) = with(|p| *p = Panels {
+            clock: false,
+            system: false,
+            hardware: false,
+            cpu: false,
+            memory: false,
+            processes: false,
+            network: false,
+            globe: false,
+            traffic: false,
+            files: false,
+            keyboard: false,
+        });
+        assert_eq!(only.panels.len(), 1);
+        assert!(panel(&only, PanelId::Terminal).width() > window.width() - 20.0);
+    }
+
     #[test]
     fn left_column_minimums_fit_the_smallest_window() {
         let (_, layout) = layout_at((MIN_WINDOW.x, MIN_WINDOW.y));
@@ -326,7 +422,7 @@ mod tests {
     fn bigger_fonts_shrink_panels_rather_than_breaking_the_layout() {
         let window = Rect::from_min_size(Pos2::ZERO, MIN_WINDOW);
         let fonts = FontSizes { label: 30.0, body: 34.0, clock: 104.0, terminal: 32.0 };
-        let layout = compute(window, &fonts);
+        let layout = compute(window, &fonts, &Panels::default());
         for (id, rect) in &layout.panels {
             assert!(window.contains_rect(*rect), "{id:?} escapes: {rect:?}");
         }

@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use directories::ProjectDirs;
 use maxminddb::{geoip2, Reader};
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
 
 use super::{lock, GeoPoint, Shared};
+use crate::config::config_dir;
 
 const SCAN_EVERY: Duration = Duration::from_secs(3);
 /// The file name the README tells people to use.
@@ -37,8 +37,8 @@ pub fn run(shared: &Shared) {
     }
 }
 
-pub fn database_path() -> Option<PathBuf> {
-    ProjectDirs::from("", "", "edex-rs").map(|dirs| dirs.config_dir().join(DATABASE_NAME))
+fn database_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join(DATABASE_NAME))
 }
 
 /// A missing or damaged file just means no points on the globe.

@@ -77,7 +77,9 @@ impl FilesView {
     }
 
     pub fn show(&mut self, ctx: &Context, painter: &Painter, layout: &Layout, tabs: &Tabs, style: &Style<'_>) {
-        let rect = layout.panels.iter().find(|(id, _)| *id == PanelId::Files).map_or(Rect::NOTHING, |(_, r)| *r);
+        let Some(rect) = layout.panels.iter().find(|(id, _)| *id == PanelId::Files).map(|(_, r)| *r) else {
+            return;
+        };
         let session = tabs.active();
         let cwd = session.and_then(Session::cwd);
         self.follow(cwd.as_ref());

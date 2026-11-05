@@ -150,7 +150,9 @@ pub struct KeyboardView {
 
 impl KeyboardView {
     pub fn show(&mut self, ctx: &Context, painter: &Painter, layout: &Layout, animate: bool, style: &Style<'_>) {
-        let rect = layout.panels.iter().find(|(id, _)| *id == PanelId::Keyboard).map_or(Rect::NOTHING, |(_, r)| *r);
+        let Some(rect) = layout.panels.iter().find(|(id, _)| *id == PanelId::Keyboard).map(|(_, r)| *r) else {
+            return;
+        };
         let (events, time, modifiers) = ctx.input(|i| (i.events.clone(), i.time, i.modifiers));
         self.observe(&events, time);
         self.track_modifiers(modifiers, time);

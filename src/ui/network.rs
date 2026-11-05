@@ -222,7 +222,7 @@ mod tests {
         let mut output = ctx.run_ui(input, |ui| {
             let painter = Painter::new(ui.ctx().clone(), LayerId::background(), window);
             let style = Style { theme: &theme, fonts: &config.fonts };
-            draw(&painter, &compute(window, &config.fonts), snapshot, 12.5, true, &style);
+            draw(&painter, &compute(window, &config.fonts, &config.panels), snapshot, 12.5, true, &style);
         });
         output.textures_delta.clear();
         output.shapes.iter().filter_map(text_of).collect()

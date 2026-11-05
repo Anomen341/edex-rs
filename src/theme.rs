@@ -57,7 +57,47 @@ impl TerminalColors {
     }
 }
 
+/// Mix `amount` of `other` into `colour`.
+fn mix(colour: Color32, other: Color32, amount: f32) -> Color32 {
+    let blend = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * amount) as u8;
+    Color32::from_rgb(blend(colour.r(), other.r()), blend(colour.g(), other.g()), blend(colour.b(), other.b()))
+}
+
 impl Theme {
+    /// The theme with this name, if there is one.
+    pub fn named(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "tron" => Some(Self::tron()),
+            "amber" => Some(Self::tinted(Color32::from_rgb(0xFF, 0xB8, 0x6B))),
+            "green" => Some(Self::tinted(Color32::from_rgb(0x8F, 0xE6, 0xA0))),
+            _ => None,
+        }
+    }
+
+    /// The tron theme recoloured around another accent. The ANSI colours stay,
+    /// because programs rely on them for meaning.
+    fn tinted(accent: Color32) -> Self {
+        let tron = Self::tron();
+        let background = tron.background;
+        let glow = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 16);
+        Self {
+            foreground: accent,
+            muted: mix(accent, background, 0.32),
+            line: mix(accent, background, 0.78),
+            rule: mix(accent, background, 0.55),
+            grid: mix(accent, background, 0.86),
+            backdrop: mix(accent, background, 0.93),
+            glow,
+            terminal: TerminalColors {
+                foreground: accent,
+                cursor: accent,
+                selection: mix(accent, background, 0.7),
+                ..tron.terminal.clone()
+            },
+            ..tron
+        }
+    }
+
     pub fn tron() -> Self {
         Self {
             background: Color32::from_rgb(0x05, 0x08, 0x0D),
@@ -99,6 +139,24 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn themes_are_found_by_name_in_any_case() {
+        assert!(Theme::named("tron").is_some());
+        assert!(Theme::named("AMBER").is_some());
+        assert!(Theme::named("Green").is_some());
+        assert!(Theme::named("nope").is_none());
+    }
+
+    #[test]
+    fn a_tinted_theme_keeps_real_ansi_colours_and_readable_text() {
+        let amber = Theme::named("amber").unwrap();
+        assert_eq!(amber.terminal.ansi, Theme::tron().terminal.ansi);
+        assert_ne!(amber.foreground, Theme::tron().foreground);
+        let brightness = |c: Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
+        assert!(brightness(amber.muted) > brightness(amber.rule));
+        assert!(brightness(amber.rule) > brightness(amber.background));
+    }
 
     #[test]
     fn xterm_colour_table_matches_the_standard_values() {

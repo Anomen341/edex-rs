@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use chrono::{Local, Timelike};
 use eframe::glow::HasContext;
-use egui::{FontData, FontDefinitions, FontFamily};
+use egui::{pos2, Align2, FontData, FontDefinitions, FontFamily};
 
 use crate::config::Config;
 use crate::net::{self, NetSnapshot};
@@ -14,6 +14,7 @@ use crate::stats::{self, Snapshot};
 use crate::term::tabs::Tabs;
 use crate::theme::Theme;
 use crate::ui::panel::{Style, DISPLAY_FONT};
+use crate::ui::boot::BootScreen;
 use crate::ui::files::FilesView;
 use crate::ui::keyboard::KeyboardView;
 use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
@@ -44,6 +45,10 @@ pub struct EdexApp {
     /// Recent CPU seconds per frame, smoothed.
     frame_cost: f32,
     animate: bool,
+    /// Present while the startup sequence is running.
+    boot: Option<BootScreen>,
+    /// A settings problem to show until the next start.
+    notice: Option<String>,
 }
 
 impl EdexApp {
@@ -51,12 +56,15 @@ impl EdexApp {
         install_fonts(&cc.egui_ctx);
         // Ctrl+plus and Ctrl+minus belong to the shell.
         cc.egui_ctx.options_mut(|options| options.zoom_with_keyboard = false);
-        let config = Config::default();
-        let theme = Theme::tron();
+        let (config, problem) = Config::load();
+        let theme = Theme::named(&config.theme);
+        let notice = problem.or_else(|| theme.is_none().then(|| format!("UNKNOWN THEME: {}", config.theme.to_uppercase())));
+        let theme = theme.unwrap_or_else(Theme::tron);
         let tabs = Tabs::new(&config, &theme.terminal, &cc.egui_ctx);
         let terminal = TerminalView::new(config.fonts.terminal);
         let software_renderer = uses_software_renderer(cc);
         let net = net::spawn(&config);
+        let boot_animation = config.boot_animation;
         Self {
             config,
             theme,
@@ -71,6 +79,8 @@ impl EdexApp {
             software_renderer,
             frame_cost: 0.0,
             animate: !software_renderer,
+            boot: boot_animation.then(BootScreen::default),
+            notice,
         }
     }
 
@@ -102,15 +112,27 @@ impl eframe::App for EdexApp {
         let window = ctx.content_rect();
         let painter = ui.painter();
         painter.rect_filled(window, 0.0, self.theme.background);
-
-        let layout = layout::compute(window, &self.config.fonts);
         let style = Style { theme: &self.theme, fonts: &self.config.fonts };
+
+        if let Some(boot) = &mut self.boot {
+            if boot.show(&ctx, painter, window, &style) {
+                self.boot = None;
+                ctx.request_repaint();
+            }
+            return;
+        }
+
+        let layout = layout::compute(window, &self.config.fonts, &self.config.panels);
         ui::draw_panels(painter, &layout, &style);
         monitor::draw(painter, &layout, &self.snapshot, now, self.config.twelve_hour_clock, self.animate, &style);
         let time = ctx.input(|i| i.time);
         network::draw(painter, &layout, &self.net_snapshot, time, self.animate, &style);
         self.files.show(&ctx, painter, &layout, &self.tabs, &style);
         self.keyboard.show(&ctx, painter, &layout, self.animate, &style);
+        if let Some(notice) = &self.notice {
+            let at = pos2(layout.terminal_frame.center().x, layout.terminal_frame.min.y - 4.0);
+            painter.text(at, Align2::CENTER_BOTTOM, notice, style.caption(), self.theme.foreground);
+        }
         self.terminal.show(&ctx, painter, &layout, &mut self.tabs, &style);
     }
 
