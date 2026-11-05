@@ -5,7 +5,7 @@ use std::path::Path;
 
 use sysinfo::System;
 
-use super::{chassis_name, clean_field, Hardware, Power};
+use super::{chassis_name, clean_field, short_vendor, Hardware, Power};
 
 const DMI: &str = "/sys/class/dmi/id";
 const POWER_SUPPLY: &str = "/sys/class/power_supply";
@@ -18,7 +18,7 @@ pub fn hardware() -> Hardware {
 fn read_hardware(dir: &Path) -> Hardware {
     let field = |name: &str| fs::read_to_string(dir.join(name)).ok().and_then(|text| clean_field(&text));
     Hardware {
-        manufacturer: field("sys_vendor"),
+        manufacturer: field("sys_vendor").map(short_vendor),
         model: field("product_name"),
         chassis: field("chassis_type").and_then(|text| text.parse().ok()).and_then(chassis_name),
     }
@@ -64,6 +64,11 @@ pub fn frequencies(system: &mut System) -> (Option<u64>, Option<u64>) {
     (current, max)
 }
 
+/// `sysinfo` reads swap accurately here.
+pub fn swap_used(_total: u64) -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,7 +104,7 @@ mod tests {
         dir.write("product_name", "To Be Filled By O.E.M.\n");
         dir.write("chassis_type", "10\n");
         let hardware = read_hardware(&dir.0);
-        assert_eq!(hardware.manufacturer.as_deref(), Some("LENOVO"));
+        assert_eq!(hardware.manufacturer.as_deref(), Some("Lenovo"));
         assert_eq!(hardware.model, None);
         assert_eq!(hardware.chassis.as_deref(), Some("Notebook"));
     }

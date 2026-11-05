@@ -1,16 +1,18 @@
 //! Reads the system through `sysinfo` and the platform module.
 
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate, System};
 
-use super::{platform, CpuStats, Hardware, MemoryStats, ProcessRow, Snapshot, HISTORY};
+use super::{platform, Hardware, MemoryStats, ProcessRow, Snapshot, HISTORY};
 
 /// More rows than any window shows; the UI draws what fits.
 const PROCESS_ROWS: usize = 24;
+/// CPU use is read every tick; everything else changes slowly enough for this.
+const SLOW_EVERY: u32 = 4;
 /// Reading sensors can be slow on Windows, and temperature changes slowly.
-const TEMPERATURE_EVERY: u32 = 5;
+const TEMPERATURE_EVERY: u32 = 20;
 
 pub struct Collector {
     system: Option<System>,
@@ -18,7 +20,11 @@ pub struct Collector {
     hardware: Hardware,
     history: Vec<VecDeque<f32>>,
     temperature: Option<f32>,
-    samples: u32,
+    /// The highest clock seen, because Windows only reports the base clock as
+    /// the maximum and a boosting CPU goes past it.
+    peak_mhz: u64,
+    ticks: u32,
+    latest: Snapshot,
 }
 
 impl Collector {
@@ -35,59 +41,72 @@ impl Collector {
             hardware: platform::hardware(),
             history: Vec::new(),
             temperature: None,
-            samples: 0,
+            peak_mhz: 0,
+            ticks: 0,
+            latest: Snapshot::default(),
         }
     }
 
+    /// One tick: new CPU use always, the slower values every few ticks.
     pub fn sample(&mut self) -> Snapshot {
-        if self.samples.is_multiple_of(TEMPERATURE_EVERY) {
+        if self.ticks.is_multiple_of(TEMPERATURE_EVERY) {
             self.temperature = self.components.as_mut().and_then(read_temperature);
         }
-        self.samples = self.samples.wrapping_add(1);
+        if self.ticks.is_multiple_of(SLOW_EVERY) {
+            self.read_slow_values();
+        }
+        self.ticks = self.ticks.wrapping_add(1);
 
-        let mut snapshot = Snapshot {
-            uptime_seconds: System::uptime().ok(),
-            power: platform::power(),
-            hardware: self.hardware.clone(),
-            ..Snapshot::default()
-        };
-        let Some(system) = &mut self.system else { return snapshot };
+        if let Some(system) = &mut self.system {
+            system.refresh_cpu_usage();
+            let usage: Vec<f32> = system.cpus().iter().map(sysinfo::Cpu::usage).collect();
+            record_history(&mut self.history, &usage);
+            self.latest.cpu.history = self.history.iter().map(|core| core.iter().copied().collect()).collect();
+            self.latest.sampled_at = Some(Instant::now());
+        }
+        self.latest.clone()
+    }
 
-        system.refresh_cpu_all();
+    fn read_slow_values(&mut self) {
+        let latest = &mut self.latest;
+        latest.uptime_seconds = System::uptime().ok();
+        latest.power = platform::power();
+        latest.hardware = self.hardware.clone();
+        latest.cpu.temperature = self.temperature;
+        let Some(system) = &mut self.system else { return };
+
         system.refresh_memory();
         let kind = ProcessRefreshKind::nothing().with_cpu().with_memory().without_tasks();
         system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
 
-        let usage: Vec<f32> = system.cpus().iter().map(sysinfo::Cpu::usage).collect();
-        record_history(&mut self.history, &usage);
+        let (frequency_mhz, rated_mhz) = platform::frequencies(system);
+        self.peak_mhz = self.peak_mhz.max(frequency_mhz.unwrap_or(0));
+        latest.cpu.frequency_mhz = frequency_mhz;
+        latest.cpu.max_frequency_mhz = rated_mhz.map(|rated| rated.max(self.peak_mhz));
+        latest.cpu.model = system.cpus().first().and_then(|cpu| clean_cpu_name(cpu.brand()));
+        latest.cpu.tasks = Some(system.processes().len());
 
-        let (frequency_mhz, max_frequency_mhz) = platform::frequencies(system);
-        snapshot.cpu = CpuStats {
-            model: system.cpus().first().and_then(|cpu| clean_cpu_name(cpu.brand())),
-            history: self.history.iter().map(|core| core.iter().copied().collect()).collect(),
-            temperature: self.temperature,
-            frequency_mhz,
-            max_frequency_mhz,
-            tasks: Some(system.processes().len()),
-        };
-        snapshot.memory = (system.total_memory() > 0).then(|| MemoryStats {
+        let swap_total = system.total_swap();
+        latest.memory = (system.total_memory() > 0).then(|| MemoryStats {
             total: system.total_memory(),
             used: system.used_memory(),
             free: system.free_memory(),
-            swap_total: system.total_swap(),
-            swap_used: system.used_swap(),
+            swap_total,
+            swap_used: platform::swap_used(swap_total).unwrap_or_else(|| system.used_swap()),
         });
-        snapshot.processes = top_processes(system, usage.len());
-        snapshot
+        latest.processes = top_processes(system, system.cpus().len());
     }
 }
 
-/// Drop trademark marks and the rated speed, which only cost width in a narrow
-/// panel. The speed has its own cell.
+/// Drop trademark marks, rated speed and core count, which only cost width in
+/// a narrow panel. Speed and cores have their own cells.
 fn clean_cpu_name(brand: &str) -> Option<String> {
     let name = brand.split(" @ ").next().unwrap_or(brand);
     let text = name.replace("(R)", "").replace("(TM)", "").replace("(tm)", "");
-    let words: Vec<&str> = text.split_whitespace().collect();
+    let words: Vec<&str> = text
+        .split_whitespace()
+        .filter(|word| *word != "Processor" && *word != "CPU" && !word.ends_with("-Core"))
+        .collect();
     (!words.is_empty()).then(|| words.join(" "))
 }
 
@@ -176,6 +195,8 @@ mod tests {
     fn cpu_names_lose_their_trademark_marks() {
         let name = clean_cpu_name("Intel(R) Celeron(R)  N5095A @ 2.00GHz ");
         assert_eq!(name.as_deref(), Some("Intel Celeron N5095A"));
+        let name = clean_cpu_name("AMD Ryzen 9 5900X 12-Core Processor");
+        assert_eq!(name.as_deref(), Some("AMD Ryzen 9 5900X"));
         assert_eq!(clean_cpu_name("   "), None);
     }
 

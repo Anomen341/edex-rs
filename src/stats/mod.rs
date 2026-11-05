@@ -18,9 +18,11 @@ use std::sync::mpsc::{sync_channel, Receiver, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Samples kept per core: two minutes at one sample a second.
-pub const HISTORY: usize = 120;
-const INTERVAL: Duration = Duration::from_secs(1);
+/// How often CPU use is sampled. Fast enough that the graphs feel live, and
+/// above the 200 ms sysinfo needs between reads.
+pub const CPU_INTERVAL: Duration = Duration::from_millis(250);
+/// Samples kept per core: one minute.
+pub const HISTORY: usize = 240;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Power {
@@ -74,6 +76,8 @@ pub struct Snapshot {
     pub cpu: CpuStats,
     pub memory: Option<MemoryStats>,
     pub processes: Vec<ProcessRow>,
+    /// When the newest CPU sample was taken, for smooth graph scrolling.
+    pub sampled_at: Option<Instant>,
 }
 
 /// Start collecting. The channel holds one snapshot, so a UI that stops
@@ -88,7 +92,7 @@ pub fn spawn() -> Receiver<Snapshot> {
             if let Err(TrySendError::Disconnected(_)) = sender.try_send(snapshot) {
                 return;
             }
-            thread::sleep(INTERVAL.saturating_sub(started.elapsed()));
+            thread::sleep(CPU_INTERVAL.saturating_sub(started.elapsed()));
         }
     });
     // With no thread the sender is dropped, and the UI shows N/A everywhere.
@@ -118,6 +122,25 @@ fn clean_field(text: &str) -> Option<String> {
     let text = text.trim();
     let filler = FILLER.contains(&text.to_ascii_lowercase().as_str());
     (!filler).then(|| text.to_owned())
+}
+
+/// The everyday name for vendors whose legal names are too long for the panel.
+fn short_vendor(name: String) -> String {
+    const KNOWN: [(&str, &str); 8] = [
+        ("micro-star", "MSI"),
+        ("asustek", "ASUS"),
+        ("gigabyte", "Gigabyte"),
+        ("hewlett-packard", "HP"),
+        ("dell", "Dell"),
+        ("lenovo", "Lenovo"),
+        ("asrock", "ASRock"),
+        ("acer", "Acer"),
+    ];
+    let lower = name.to_ascii_lowercase();
+    KNOWN
+        .iter()
+        .find(|(prefix, _)| lower.starts_with(prefix))
+        .map_or(name, |(_, short)| (*short).to_owned())
 }
 
 /// The name for an SMBIOS chassis type number.
@@ -163,6 +186,14 @@ mod tests {
         assert_eq!(clean_field("Default string"), None);
         assert_eq!(clean_field(""), None);
         assert_eq!(clean_field(" ASUSTeK "), Some("ASUSTeK".to_owned()));
+    }
+
+    #[test]
+    fn long_vendor_names_are_shortened() {
+        assert_eq!(short_vendor("Micro-Star International Co., Ltd.".to_owned()), "MSI");
+        assert_eq!(short_vendor("ASUSTeK COMPUTER INC.".to_owned()), "ASUS");
+        assert_eq!(short_vendor("LENOVO".to_owned()), "Lenovo");
+        assert_eq!(short_vendor("IP3 Tech".to_owned()), "IP3 Tech");
     }
 
     #[test]

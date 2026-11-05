@@ -15,6 +15,14 @@ use crate::ui::panel::{Style, DISPLAY_FONT};
 use crate::ui::terminal::{TerminalView, BOLD, BOLD_ITALIC, ITALIC};
 use crate::ui::{self, layout, monitor};
 
+/// Smooth graphs redraw about 30 times a second. That is nothing on a GPU, but
+/// heavy on a software renderer, so measured frame cost decides. The two limits
+/// keep it from flipping back and forth around a single value.
+const ANIMATE_DELAY: Duration = Duration::from_millis(33);
+const STILL_DELAY: Duration = Duration::from_millis(500);
+const FRAME_COST_TOO_HIGH: f32 = 0.012;
+const FRAME_COST_FINE: f32 = 0.006;
+
 pub struct EdexApp {
     config: Config,
     theme: Theme,
@@ -22,6 +30,9 @@ pub struct EdexApp {
     terminal: TerminalView,
     stats: Receiver<Snapshot>,
     snapshot: Snapshot,
+    /// Recent CPU seconds per frame, smoothed.
+    frame_cost: f32,
+    animate: bool,
 }
 
 impl EdexApp {
@@ -33,7 +44,13 @@ impl EdexApp {
         let theme = Theme::tron();
         let tabs = Tabs::new(&config, &theme.terminal, &cc.egui_ctx);
         let terminal = TerminalView::new(config.fonts.terminal);
-        Self { config, theme, tabs, terminal, stats: stats::spawn(), snapshot: Snapshot::default() }
+        Self { config, theme, tabs, terminal, stats: stats::spawn(), snapshot: Snapshot::default(), frame_cost: 0.0, animate: true }
+    }
+
+    /// Update the smoothed frame cost and decide whether to animate.
+    fn track_frame_cost(&mut self, cost: f32) {
+        self.frame_cost = self.frame_cost * 0.9 + cost * 0.1;
+        self.animate = next_animate(self.animate, self.frame_cost);
     }
 
     /// Take the newest snapshot without waiting. If the stats thread has gone,
@@ -53,13 +70,17 @@ impl EdexApp {
 }
 
 impl eframe::App for EdexApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.receive_stats();
         let now = Local::now();
-        // Wake exactly on the next second so the clock never skips a digit.
-        let to_next_second = 1_000 - u64::from(now.nanosecond() / 1_000_000).min(999);
-        ctx.request_repaint_after(Duration::from_millis(to_next_second));
+        if let Some(cost) = frame.info().cpu_usage {
+            self.track_frame_cost(cost);
+        }
+        // Whatever the rate, wake on the next second so the clock never skips.
+        let to_next_second = Duration::from_millis(1_000 - u64::from(now.nanosecond() / 1_000_000).min(999));
+        let delay = if self.animate { ANIMATE_DELAY } else { STILL_DELAY };
+        ctx.request_repaint_after(delay.min(to_next_second));
 
         let window = ctx.content_rect();
         let painter = ui.painter();
@@ -68,12 +89,20 @@ impl eframe::App for EdexApp {
         let layout = layout::compute(window, &self.config.fonts);
         let style = Style { theme: &self.theme, fonts: &self.config.fonts };
         ui::draw_panels(painter, &layout, &style);
-        monitor::draw(painter, &layout, &self.snapshot, now, self.config.twelve_hour_clock, &style);
+        monitor::draw(painter, &layout, &self.snapshot, now, self.config.twelve_hour_clock, self.animate, &style);
         self.terminal.show(&ctx, painter, &layout, &mut self.tabs, &style);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.theme.background.to_normalized_gamma_f32()
+    }
+}
+
+fn next_animate(animate: bool, frame_cost: f32) -> bool {
+    if animate {
+        frame_cost < FRAME_COST_TOO_HIGH
+    } else {
+        frame_cost < FRAME_COST_FINE
     }
 }
 
@@ -101,4 +130,17 @@ fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(name.into()), list);
     }
     ctx.set_fonts(fonts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_stops_on_slow_frames_and_needs_a_clear_margin_to_return() {
+        assert!(next_animate(true, 0.002));
+        assert!(!next_animate(true, 0.020));
+        assert!(!next_animate(false, 0.009));
+        assert!(next_animate(false, 0.003));
+    }
 }

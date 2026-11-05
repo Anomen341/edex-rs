@@ -1,13 +1,15 @@
 //! The live left column. Each panel draws from the latest snapshot and falls
 //! back to N/A for anything missing, at any panel size.
 
+use std::time::Instant;
+
 use chrono::{DateTime, Local};
 use egui::{pos2, vec2, Align2, FontId, Painter, Rect, Shape, Stroke};
 
 use super::layout::{Layout, PanelId};
 use super::panel::{self, Style};
 use crate::stats::format::{self, NOT_AVAILABLE};
-use crate::stats::{CpuStats, MemoryStats, ProcessRow, Snapshot, HISTORY};
+use crate::stats::{CpuStats, MemoryStats, ProcessRow, Snapshot, CPU_INTERVAL, HISTORY};
 
 /// Monospace advance as a share of the font size.
 const CHAR_WIDTH: f32 = 0.6;
@@ -20,8 +22,10 @@ pub fn draw(
     snapshot: &Snapshot,
     now: DateTime<Local>,
     twelve_hour: bool,
+    animate: bool,
     style: &Style<'_>,
 ) {
+    let scroll = if animate { scroll_progress(snapshot.sampled_at, Instant::now()) } else { 1.0 };
     for (id, rect) in &layout.panels {
         match id {
             PanelId::Clock => {
@@ -30,12 +34,19 @@ pub fn draw(
             }
             PanelId::System => system(painter, *rect, snapshot, now, style),
             PanelId::Hardware => hardware(painter, *rect, snapshot, style),
-            PanelId::Cpu => cpu(painter, *rect, &snapshot.cpu, style),
+            PanelId::Cpu => cpu(painter, *rect, &snapshot.cpu, scroll, style),
             PanelId::Memory => memory(painter, *rect, snapshot.memory, style),
             PanelId::Processes => processes(painter, *rect, &snapshot.processes, style),
             _ => {}
         }
     }
+}
+
+/// How far through the gap to the next sample we are, from 0 to 1.
+fn scroll_progress(sampled_at: Option<Instant>, now: Instant) -> f32 {
+    sampled_at.map_or(1.0, |at| {
+        (now.saturating_duration_since(at).as_secs_f32() / CPU_INTERVAL.as_secs_f32()).clamp(0.0, 1.0)
+    })
 }
 
 fn clock_text(now: DateTime<Local>, twelve_hour: bool) -> (String, Option<String>) {
@@ -118,7 +129,7 @@ fn hardware(painter: &Painter, rect: Rect, snapshot: &Snapshot, style: &Style<'_
     }
 }
 
-fn cpu(painter: &Painter, rect: Rect, cpu: &CpuStats, style: &Style<'_>) {
+fn cpu(painter: &Painter, rect: Rect, cpu: &CpuStats, scroll: f32, style: &Style<'_>) {
     let chars = chars_in(rect.width() * 0.62, style.caption().size * 0.86);
     let model = format::truncate(format::text(cpu.model.as_deref()), chars);
     let (inner, content) = panel::titled(painter, rect, PanelId::Cpu.title(), Some(&model), style);
@@ -146,7 +157,7 @@ fn cpu(painter: &Painter, rect: Rect, cpu: &CpuStats, style: &Style<'_>) {
         return;
     }
     for (area, group) in graph_areas(graphs, groups.len()).into_iter().zip(&groups) {
-        core_graph(&inner, area, &cpu.history[group.clone()], group.start + 1, style);
+        core_graph(&inner, area, &cpu.history[group.clone()], group.start + 1, scroll, style);
     }
 }
 
@@ -186,13 +197,13 @@ fn core_groups(cores: usize) -> Vec<std::ops::Range<usize>> {
 /// Names and mean at the left; faint lines for each core and one bright line
 /// for the group's mean at the right. The fixed 0-100 scale keeps groups
 /// comparable at a glance.
-fn core_graph(painter: &Painter, group: Rect, cores: &[Vec<f32>], first_core: usize, style: &Style<'_>) {
+fn core_graph(painter: &Painter, group: Rect, cores: &[Vec<f32>], first_core: usize, scroll: f32, style: &Style<'_>) {
     const LABEL_WIDTH: f32 = 66.0;
     let theme = style.theme;
     let last = first_core + cores.len() - 1;
     let name = if cores.len() == 1 { format!("#{first_core}") } else { format!("#{first_core}-{last}") };
     let mean = mean_series(cores);
-    let average = format!("Avg. {}", format::percent(mean.last().copied()));
+    let average = format!("Avg. {}", format::percent(recent_mean(&mean)));
     let caption = style.caption();
     let centre = group.center().y;
     painter.text(pos2(group.min.x, centre), Align2::LEFT_BOTTOM, name, style.heading(), theme.foreground);
@@ -204,24 +215,32 @@ fn core_graph(painter: &Painter, group: Rect, cores: &[Vec<f32>], first_core: us
     clip.hline(area.x_range(), area.center().y, Stroke::new(1.0, theme.grid));
     let core_stroke = Stroke::new(1.0, theme.muted);
     for core in cores {
-        clip.add(Shape::line(graph_points(area, core), core_stroke));
+        clip.add(Shape::line(graph_points(area, core, scroll), core_stroke));
     }
-    clip.add(Shape::line(graph_points(area, &mean), Stroke::new(1.6, theme.foreground)));
+    clip.add(Shape::line(graph_points(area, &mean, scroll), Stroke::new(1.6, theme.foreground)));
 }
 
-/// Newest sample on the right edge, so the line grows in from the right.
-fn graph_points(area: Rect, values: &[f32]) -> Vec<egui::Pos2> {
+/// Newest sample at the right, sliding in as `scroll` goes from 0 to 1 so the
+/// line moves continuously between samples. The caller clips the overhang.
+fn graph_points(area: Rect, values: &[f32], scroll: f32) -> Vec<egui::Pos2> {
     let step = area.width() / (HISTORY - 1) as f32;
     let count = values.len();
+    let right = area.max.x + (1.0 - scroll) * step;
     values
         .iter()
         .enumerate()
         .map(|(i, value)| {
-            let x = area.max.x - (count - 1 - i) as f32 * step;
+            let x = right - (count - 1 - i) as f32 * step;
             let y = area.max.y - area.height() * value.clamp(0.0, 100.0) / 100.0;
             pos2(x, y)
         })
         .collect()
+}
+
+/// The last second's mean, so the printed figure stays readable at 4 samples a second.
+fn recent_mean(values: &[f32]) -> Option<f32> {
+    let recent = &values[values.len().saturating_sub(4)..];
+    (!recent.is_empty()).then(|| recent.iter().sum::<f32>() / recent.len() as f32)
 }
 
 fn mean_series(cores: &[Vec<f32>]) -> Vec<f32> {
@@ -372,7 +391,7 @@ mod tests {
         let mut output = ctx.run_ui(input, |ui| {
             let painter = Painter::new(ui.ctx().clone(), LayerId::background(), window);
             let style = Style { theme: &theme, fonts: &config.fonts };
-            draw(&painter, &compute(window, &config.fonts), snapshot, Local::now(), false, &style);
+            draw(&painter, &compute(window, &config.fonts), snapshot, Local::now(), false, true, &style);
         });
         output.textures_delta.clear();
         output.shapes.iter().filter_map(text_of).collect()
@@ -406,6 +425,7 @@ mod tests {
             processes: (0..24)
                 .map(|pid| ProcessRow { pid, name: "process".to_owned(), cpu: 1.0, memory: 2.0 })
                 .collect(),
+            sampled_at: None,
         }
     }
 
@@ -475,11 +495,36 @@ mod tests {
     #[test]
     fn graph_points_stay_inside_their_area() {
         let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 50.0));
-        let points = graph_points(area, &[-5.0, 0.0, 50.0, 100.0, 500.0]);
+        let points = graph_points(area, &[-5.0, 0.0, 50.0, 100.0, 500.0], 1.0);
         assert!(points.iter().all(|p| area.expand(0.01).contains(*p)));
         assert_eq!(points.last().unwrap().x, area.max.x);
         assert_eq!(points[1].y, area.max.y);
         assert_eq!(points[3].y, area.min.y);
+    }
+
+    #[test]
+    fn the_graph_slides_a_full_step_between_samples() {
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2((HISTORY - 1) as f32, 50.0));
+        let start = graph_points(area, &[10.0, 20.0], 0.0);
+        let end = graph_points(area, &[10.0, 20.0], 1.0);
+        assert_eq!(start[1].x - end[1].x, 1.0);
+        assert_eq!(end[1].x, area.max.x);
+    }
+
+    #[test]
+    fn scroll_progress_runs_from_zero_to_one_and_stops() {
+        let start = Instant::now();
+        assert_eq!(scroll_progress(Some(start), start), 0.0);
+        assert!((scroll_progress(Some(start), start + CPU_INTERVAL / 2) - 0.5).abs() < 0.01);
+        assert_eq!(scroll_progress(Some(start), start + CPU_INTERVAL * 3), 1.0);
+        assert_eq!(scroll_progress(None, start), 1.0);
+    }
+
+    #[test]
+    fn the_printed_average_covers_the_last_second() {
+        assert_eq!(recent_mean(&[100.0, 0.0, 10.0, 20.0, 30.0, 40.0]), Some(25.0));
+        assert_eq!(recent_mean(&[8.0]), Some(8.0));
+        assert_eq!(recent_mean(&[]), None);
     }
 
     #[test]

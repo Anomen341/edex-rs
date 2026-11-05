@@ -1,10 +1,15 @@
 //! Windows sources. Each is a plain API call that needs no admin rights.
 //! WMI is avoided: it can stall for seconds, and `wmic` is gone from Windows 11.
 
+use std::cell::RefCell;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use sysinfo::System;
+use windows_sys::Win32::System::Performance::{
+    PdhAddEnglishCounterW, PdhCollectQueryData, PdhGetFormattedCounterValue, PdhOpenQueryW,
+    PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY,
+};
 use windows_sys::Win32::System::Power::{
     CallNtPowerInformation, GetSystemPowerStatus, ProcessorInformation, PROCESSOR_POWER_INFORMATION,
     SYSTEM_POWER_STATUS,
@@ -13,6 +18,8 @@ use windows_sys::Win32::System::SystemInformation::GetSystemFirmwareTable;
 
 use super::{smbios, Hardware, Power};
 
+/// Lets a counter read above 100. From `pdh.h`; missing from the bindings.
+const PDH_FMT_NOCAP100: u32 = 0x0000_8000;
 /// The firmware table provider for raw SMBIOS data.
 const RSMB: u32 = u32::from_be_bytes(*b"RSMB");
 /// `RawSMBIOSData` has 8 bytes of header before the table.
@@ -60,8 +67,80 @@ pub fn power() -> Option<Power> {
     Some(Power::Battery { percent, charging })
 }
 
-/// Current and maximum clock from the power manager, averaged over cores.
+/// Live readings from Windows performance counters, the source Task Manager
+/// uses. These need two collections before they report anything.
+struct Counters {
+    query: PDH_HQUERY,
+    performance: PDH_HCOUNTER,
+    paging: PDH_HCOUNTER,
+}
+
+impl Counters {
+    fn open() -> Option<Self> {
+        let mut query = null_mut();
+        // SAFETY: `query` is a valid out pointer, and a null source means live data.
+        if unsafe { PdhOpenQueryW(null(), 0, &mut query) } != 0 {
+            return None;
+        }
+        let add = |path: &str| {
+            let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+            let mut counter = null_mut();
+            // SAFETY: `wide` is NUL-terminated and outlives the call.
+            let status = unsafe { PdhAddEnglishCounterW(query, wide.as_ptr(), 0, &mut counter) };
+            (status == 0).then_some(counter).unwrap_or(null_mut())
+        };
+        Some(Self {
+            query,
+            performance: add("\\Processor Information(_Total)\\% Processor Performance"),
+            paging: add("\\Paging File(_Total)\\% Usage"),
+        })
+    }
+
+    fn read(&self, counter: PDH_HCOUNTER) -> Option<f64> {
+        if counter.is_null() {
+            return None;
+        }
+        let mut value = PDH_FMT_COUNTERVALUE::default();
+        // Boost runs past 100%, so the default cap must be turned off.
+        let format = PDH_FMT_DOUBLE | PDH_FMT_NOCAP100;
+        // SAFETY: `counter` came from this query and `value` is a valid out pointer.
+        let status = unsafe { PdhGetFormattedCounterValue(counter, format, null_mut(), &mut value) };
+        // SAFETY: PDH_FMT_DOUBLE selects the union's double member.
+        (status == 0).then(|| unsafe { value.Anonymous.doubleValue })
+    }
+}
+
+thread_local! {
+    /// PDH handles are not `Send`, and only the stats thread uses them.
+    static COUNTERS: RefCell<Option<Counters>> = RefCell::new(Counters::open());
+}
+
+/// Current and rated clock. The power manager gives the rated clock, but on
+/// many CPUs its current value sticks at the base clock, so the live figure is
+/// the rated clock scaled by the performance counter. If that counter is
+/// unavailable the power manager's own value is used.
 pub fn frequencies(system: &mut System) -> (Option<u64>, Option<u64>) {
+    let (reported, rated) = power_manager_clock(system);
+    let performance = COUNTERS.with_borrow(|counters| {
+        let counters = counters.as_ref()?;
+        // SAFETY: the query handle is valid for the life of `counters`.
+        if unsafe { PdhCollectQueryData(counters.query) } != 0 {
+            return None;
+        }
+        counters.read(counters.performance)
+    });
+    let live = rated.zip(performance).map(|(mhz, percent)| (mhz as f64 * percent / 100.0) as u64);
+    (live.filter(|mhz| *mhz > 0).or(reported), rated)
+}
+
+/// Page file use. `sysinfo` estimates this from committed memory, which reads
+/// zero whenever commit fits in RAM, even with a page file in use.
+pub fn swap_used(total: u64) -> Option<u64> {
+    let percent = COUNTERS.with_borrow(|counters| counters.as_ref()?.read(counters.as_ref()?.paging))?;
+    Some((total as f64 * percent / 100.0) as u64)
+}
+
+fn power_manager_clock(system: &System) -> (Option<u64>, Option<u64>) {
     let cores = system.cpus().len();
     if cores == 0 {
         return (None, None);

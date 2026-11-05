@@ -29,4 +29,4 @@ lto = "thin"
 strip = true
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Power", "Win32_System_SystemInformation", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Performance", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_Foundation"] }

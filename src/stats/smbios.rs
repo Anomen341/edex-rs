@@ -1,7 +1,7 @@
 //! Reads the system and chassis records from a raw SMBIOS table. Firmware data
 //! is untrusted input, so every offset is checked.
 
-use super::{chassis_name, clean_field, Hardware};
+use super::{chassis_name, clean_field, short_vendor, Hardware};
 
 const SYSTEM_RECORD: u8 = 1;
 const CHASSIS_RECORD: u8 = 3;
@@ -42,7 +42,7 @@ pub fn parse(mut table: &[u8]) -> Hardware {
     while let Some((record, rest)) = next_record(table) {
         match record.kind {
             SYSTEM_RECORD => {
-                hardware.manufacturer = record.string_at(4);
+                hardware.manufacturer = record.string_at(4).map(short_vendor);
                 hardware.model = record.string_at(5);
             }
             CHASSIS_RECORD => {
@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn reads_system_and_chassis_records() {
         let hardware = parse(&table());
-        assert_eq!(hardware.manufacturer.as_deref(), Some("Dell Inc."));
+        assert_eq!(hardware.manufacturer.as_deref(), Some("Dell"));
         assert_eq!(hardware.model.as_deref(), Some("XPS 15"));
         assert_eq!(hardware.chassis.as_deref(), Some("Notebook"));
     }
