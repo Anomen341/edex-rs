@@ -2,6 +2,7 @@
 //! through the painter so the look is fully ours.
 
 pub mod boot;
+mod boot_lines;
 pub mod files;
 pub mod keyboard;
 pub mod layout;

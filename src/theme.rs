@@ -2,6 +2,13 @@
 
 use egui::Color32;
 
+/// Status colours in the startup log. Every theme shares them: green has to
+/// read as green, whatever the accent.
+pub const STATUS_OK: Color32 = Color32::from_rgb(0x3D, 0xE0, 0x6B);
+pub const STATUS_WARN: Color32 = Color32::from_rgb(0xF5, 0xC8, 0x42);
+pub const STATUS_FAILED: Color32 = Color32::from_rgb(0xFF, 0x5C, 0x5C);
+pub const STATUS_RARE: Color32 = Color32::from_rgb(0xE0, 0x7B, 0xFF);
+
 #[derive(Clone, Debug)]
 pub struct Theme {
     /// Window background.

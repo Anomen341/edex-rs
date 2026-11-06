@@ -115,7 +115,7 @@ impl eframe::App for EdexApp {
         let style = Style { theme: &self.theme, fonts: &self.config.fonts };
 
         if let Some(boot) = &mut self.boot {
-            if boot.show(&ctx, painter, window, &style) {
+            if boot.show(&ctx, painter, window, &self.snapshot, &style) {
                 self.boot = None;
                 ctx.request_repaint();
             }
