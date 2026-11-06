@@ -17,10 +17,39 @@ view of your machine, and nothing depends on a web service staying online.
 
 Anything that can't be read shows `N/A` or `OFFLINE`. It never stops the app.
 
+## Download
+
+Ready-made builds for Windows 11 and Debian 13 are on the
+[releases page](https://github.com/Anomen341/edex-rs/releases). This repository
+is private, so a plain `wget` or `curl` of a download link gets a 404. Either
+sign in to GitHub in a browser and download from there, or use the GitHub CLI.
+This fetches the latest Debian build into the current folder and runs it:
+
+```sh
+sudo apt install gh
+gh auth login
+gh release download --repo Anomen341/edex-rs --pattern '*debian13*'
+tar xzf edex-rs-*-debian13-x64.tar.gz
+./edex-rs
+```
+
+Run `./edex-rs` from a terminal on the desktop, in the folder you extracted it
+to. It won't open from a plain SSH session. The Debian build needs Debian 13.
+
 ## Build and run
 
 You need a current stable Rust from [rustup](https://rustup.rs). Rust from
-`apt` is too old for these dependencies.
+`apt` is too old for these dependencies. After installing it, open a new
+terminal so that `cargo` is on your path.
+
+Every command below runs from inside a copy of this repository. Get one first:
+
+```sh
+sudo apt install gh
+gh auth login
+gh repo clone Anomen341/edex-rs
+cd edex-rs
+```
 
 ### Debian 12 and 13
 
@@ -29,6 +58,9 @@ sudo apt install build-essential pkg-config
 cargo build --release
 ./target/release/edex-rs
 ```
+
+If `cargo build` fails, `./target/release/edex-rs` reports "No such file or
+directory", because nothing was built. Fix the build error first.
 
 Build on the Debian version you plan to run it on. A binary built on Debian 13
 needs a newer glibc than Debian 12 has, so it won't start there.
@@ -39,7 +71,8 @@ graph scrolling to save CPU.
 
 ### Windows 11
 
-Install Rust with rustup and the Visual Studio C++ Build Tools, then:
+Install Rust with rustup and the Visual Studio C++ Build Tools, then, from
+inside your copy of the repository:
 
 ```powershell
 cargo build --release
