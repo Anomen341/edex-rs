@@ -19,16 +19,12 @@ Anything that can't be read shows `N/A` or `OFFLINE`. It never stops the app.
 
 ## Download
 
-Ready-made builds for Windows 11 and Debian 13 are on the
-[releases page](https://github.com/Anomen341/edex-rs/releases). This repository
-is private, so a plain `wget` or `curl` of a download link gets a 404. Either
-sign in to GitHub in a browser and download from there, or use the GitHub CLI.
-This fetches the latest Debian build into the current folder and runs it:
+Ready-made builds for Windows 10 and 11 and Debian 13 are on the
+[releases page](https://github.com/Anomen341/edex-rs/releases). On Windows,
+download the `.exe` and run it. On Debian, download the `debian13` tarball,
+then:
 
 ```sh
-sudo apt install gh
-gh auth login
-gh release download --repo Anomen341/edex-rs --pattern '*debian13*'
 tar xzf edex-rs-*-debian13-x64.tar.gz
 ./edex-rs
 ```
@@ -45,9 +41,7 @@ terminal so that `cargo` is on your path.
 Every command below runs from inside a copy of this repository. Get one first:
 
 ```sh
-sudo apt install gh
-gh auth login
-gh repo clone Anomen341/edex-rs
+git clone https://github.com/Anomen341/edex-rs.git
 cd edex-rs
 ```
 
