@@ -2,11 +2,12 @@
 //! draws with or without connections.
 
 use std::sync::LazyLock;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use egui::epaint::Mesh;
 use egui::{pos2, vec2, Align2, Color32, Painter, Pos2, Rect, Shape, Stroke};
 
+use super::dice::Dice;
 use super::layout::{Layout, PanelId};
 use super::monitor::{cells, graph_points, scroll_progress};
 use super::panel::{self, Style};
@@ -17,6 +18,14 @@ use crate::stats::format;
 const ROTATION_SECONDS: f64 = 60.0;
 /// Lean of the globe towards the viewer.
 const TILT_DEGREES: f32 = 18.0;
+/// The globe's share of the space it could fill, leaving room for orbits.
+const GLOBE_SHARE: f32 = 0.8;
+/// Decorative satellites circling the globe.
+const SATELLITES: usize = 5;
+/// The made-up "connected satellites" figure changes this often, in seconds.
+const RECOUNT_SECONDS: u64 = 600;
+/// The made-up figure always falls in this range.
+const SATELLITE_RANGE: (u64, u64) = (10, 40);
 /// The graph never scales below this, so idle noise stays flat. Bytes a second.
 const MIN_SCALE: f32 = 64.0 * 1024.0;
 
@@ -87,20 +96,122 @@ fn globe(painter: &Painter, rect: Rect, snapshot: &NetSnapshot, time: f64, style
         "NO GEOIP DATABASE".to_owned()
     };
     inner.text(content.right_top(), Align2::RIGHT_TOP, located, font.clone(), theme.muted);
+    let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs());
+    let satellites = format!("CONNECTED SATELLITES {}", satellite_count(unix));
+    inner.text(content.left_bottom(), Align2::LEFT_BOTTOM, satellites, font.clone(), theme.muted);
 
-    let area = Rect::from_min_max(content.min + vec2(0.0, font.size * 1.4), content.max);
-    let radius = area.width().min(area.height()) * 0.5 - 2.0;
+    let caption = font.size * 1.4;
+    let area = Rect::from_min_max(content.min + vec2(0.0, caption), content.max - vec2(0.0, caption));
+    let room = area.width().min(area.height()) * 0.5 - 2.0;
+    let radius = room * GLOBE_SHARE;
     if radius < 8.0 {
         return;
     }
     let spin = (time / ROTATION_SECONDS * std::f64::consts::TAU) as f32;
     let view = View { spin, centre: area.center(), radius };
+    // Orbits are fixed in space, so the satellites don't turn with the land.
+    let sky = View { spin: 0.0, ..view };
+    for orbit in ORBITS.iter().filter(|orbit| orbit.behind(&sky, time)) {
+        orbit.draw(&inner, &sky, time, theme.foreground);
+    }
     inner.add(land_mesh(&view, theme.foreground));
     for point in &snapshot.points {
         marker(&inner, &view, *point, theme.foreground);
     }
+    for orbit in ORBITS.iter().filter(|orbit| !orbit.behind(&sky, time)) {
+        orbit.draw(&inner, &sky, time, theme.foreground);
+    }
 }
 
+/// The made-up "connected satellites" figure for this moment: steady for
+/// `RECOUNT_SECONDS`, then a new roll. Purely decorative, nothing is measured.
+fn satellite_count(unix_seconds: u64) -> u64 {
+    let (low, high) = SATELLITE_RANGE;
+    let mut dice = Dice::new(unix_seconds / RECOUNT_SECONDS);
+    dice.next();
+    low + dice.below(high - low + 1)
+}
+
+/// Random orbits, rolled once per start.
+static ORBITS: LazyLock<Vec<Orbit>> = LazyLock::new(|| {
+    let mut dice = Dice::seeded();
+    (0..SATELLITES).map(|_| Orbit::roll(&mut dice)).collect()
+});
+
+/// A circular orbit around the globe's centre. Distances are in globe radii.
+#[derive(Clone, Copy, Debug)]
+struct Orbit {
+    /// Tilt of the orbit away from the equator, radians.
+    inclination: f32,
+    /// Where the orbit crosses the equator going north, radians.
+    node: f32,
+    altitude: f32,
+    /// Seconds per lap; negative goes the other way round.
+    period: f64,
+    phase: f64,
+}
+
+impl Orbit {
+    fn roll(dice: &mut Dice) -> Self {
+        let direction = if dice.below(2) == 0 { 1.0 } else { -1.0 };
+        Self {
+            inclination: dice.between(0.15, 1.4) as f32,
+            node: dice.between(0.0, std::f64::consts::TAU) as f32,
+            altitude: dice.between(1.08, 1.22) as f32,
+            period: direction * dice.between(18.0, 40.0),
+            phase: dice.between(0.0, 1.0),
+        }
+    }
+
+    /// Position in space at `time` seconds, `lag` radians back along the orbit.
+    fn position(&self, time: f64, lag: f32) -> [f32; 3] {
+        let turns = (time / self.period + self.phase).fract();
+        let angle = (turns * std::f64::consts::TAU) as f32 - lag * self.period.signum() as f32;
+        let (sin, cos) = angle.sin_cos();
+        // In the equator plane, then tilted about the x axis, then turned to the node.
+        let (x, y, z) = (cos, 0.0_f32, sin);
+        let (si, ci) = self.inclination.sin_cos();
+        let (y, z) = (y * ci - z * si, y * si + z * ci);
+        let (sn, cn) = self.node.sin_cos();
+        let (x, z) = (x * cn + z * sn, z * cn - x * sn);
+        [x * self.altitude, y * self.altitude, z * self.altitude]
+    }
+
+    /// True while the globe hides it: on the far side and inside the disc.
+    fn behind(&self, view: &View, time: f64) -> bool {
+        hidden(view, self.position(time, 0.0))
+    }
+
+    /// A bright point with a short fading trail; nothing where the globe covers it.
+    fn draw(&self, painter: &Painter, view: &View, time: f64, colour: Color32) {
+        const TRAIL: usize = 8;
+        for step in (1..=TRAIL).rev() {
+            let point = self.position(time, step as f32 * 0.045);
+            if hidden(view, point) {
+                continue;
+            }
+            let fade = 0.55 * (1.0 - step as f32 / (TRAIL as f32 + 1.0));
+            painter.circle_filled(view.project(point).0, 1.2, colour.gamma_multiply(fade));
+        }
+        let point = self.position(time, 0.0);
+        if hidden(view, point) {
+            return;
+        }
+        let (at, _) = view.project(point);
+        painter.circle_filled(at, 2.2, colour);
+        // Solar panels either side.
+        let wing = Stroke::new(1.0, colour.gamma_multiply(0.8));
+        painter.line_segment([at - vec2(5.0, 0.0), at - vec2(3.0, 0.0)], wing);
+        painter.line_segment([at + vec2(3.0, 0.0), at + vec2(5.0, 0.0)], wing);
+    }
+}
+
+fn hidden(view: &View, point: [f32; 3]) -> bool {
+    let (at, depth) = view.project(point);
+    depth < 0.0 && at.distance(view.centre) < view.radius
+}
+
+#[derive(Clone, Copy)]
 struct View {
     spin: f32,
     centre: Pos2,
@@ -332,6 +443,49 @@ mod tests {
         let still = View { spin: 0.0, centre: Pos2::ZERO, radius: 1.0 };
         let point = to_unit_vector(0.0, 0.0);
         assert!(turned.project(point).0.x > still.project(point).0.x);
+    }
+
+    #[test]
+    fn the_globe_shows_a_satellite_count() {
+        let text = render((1600.0, 900.0), &online());
+        assert!(text.iter().any(|line| line.starts_with("CONNECTED SATELLITES ")), "{text:?}");
+    }
+
+    #[test]
+    fn the_satellite_count_stays_in_range_and_holds_for_ten_minutes() {
+        let mut seen = std::collections::BTreeSet::new();
+        for slot in 0..2_000u64 {
+            let start = 1_700_000_000 / RECOUNT_SECONDS * RECOUNT_SECONDS + slot * RECOUNT_SECONDS;
+            let count = satellite_count(start);
+            assert!((10..=40).contains(&count), "{count}");
+            assert_eq!(satellite_count(start + RECOUNT_SECONDS - 1), count);
+            seen.insert(count);
+        }
+        assert_eq!(seen.len(), 31, "every value turns up eventually");
+    }
+
+    #[test]
+    fn orbits_stay_inside_the_room_left_around_the_globe() {
+        let view = View { spin: 0.0, centre: Pos2::ZERO, radius: GLOBE_SHARE };
+        for seed in 0..50 {
+            let orbit = Orbit::roll(&mut Dice::new(seed));
+            for tenth in 0..400 {
+                let point = orbit.position(f64::from(tenth) / 10.0, 0.0);
+                let height = point.iter().map(|v| v * v).sum::<f32>().sqrt();
+                assert!((height - orbit.altitude).abs() < 1e-4);
+                assert!(height > 1.0, "never inside the globe");
+                assert!(view.project(point).0.distance(Pos2::ZERO) <= 1.0, "fits the space the full-size globe used");
+            }
+        }
+    }
+
+    #[test]
+    fn satellites_hide_only_behind_the_globe() {
+        let view = View { spin: 0.0, centre: Pos2::ZERO, radius: 1.0 };
+        assert!(hidden(&view, to_unit_vector(-TILT_DEGREES, 180.0).map(|v| v * 1.1)));
+        assert!(!hidden(&view, to_unit_vector(TILT_DEGREES, 0.0).map(|v| v * 1.1)));
+        // Far side but out past the edge of the disc stays visible.
+        assert!(!hidden(&view, [1.2, 0.0, -0.1]));
     }
 
     #[test]

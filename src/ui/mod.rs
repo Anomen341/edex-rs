@@ -3,6 +3,7 @@
 
 pub mod boot;
 mod boot_lines;
+mod dice;
 pub mod files;
 pub mod keyboard;
 pub mod layout;

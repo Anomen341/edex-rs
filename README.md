@@ -141,6 +141,10 @@ go, add a free GeoLite2 City database. Nothing is downloaded for you.
 
 Lookups happen on your machine, so your connections aren't sent anywhere.
 
+The satellites circling the globe and the CONNECTED SATELLITES figure are
+decoration. The orbits are random each start, and the figure is a random
+number from 10 to 40 that changes every 10 minutes. Nothing is measured.
+
 ## What it sends over the network
 
 - A TCP connect to `latency_host` every 5 seconds, to measure latency.
