@@ -183,3 +183,8 @@ reads all run on background threads.
 ## Credits
 
 Third-party fonts and data are listed in [assets/NOTICE.md](assets/NOTICE.md).
+
+## License
+
+The code is under the [MIT License](LICENSE). The bundled fonts keep their own
+license, the SIL Open Font License; see [assets/NOTICE.md](assets/NOTICE.md).

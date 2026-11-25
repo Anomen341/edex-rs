@@ -4,6 +4,7 @@ version = "0.1.1"
 edition = "2021"
 publish = false
 description = "A native sci-fi terminal and system monitor"
+license = "MIT"
 
 [dependencies]
 alacritty_terminal = "0.26.0"
